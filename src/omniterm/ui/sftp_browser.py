@@ -5,6 +5,7 @@ import os
 import stat
 import posixpath
 import tempfile
+import time
 
 # Custom item data roles
 PATH_ROLE = 32      # full remote path for the entry
@@ -107,7 +108,7 @@ class SFTPTreeView(QTreeView):
         target_dir = self.browser.current_path
         index = self.indexAt(event.position().toPoint())
         if index.isValid():
-            item = self.browser.model.itemFromIndex(index)
+            item = self.browser.model.itemFromIndex(index.siblingAtColumn(0))
             if item is not None and item.data(ISDIR_ROLE):
                 target_dir = item.data(PATH_ROLE)
 
@@ -122,14 +123,24 @@ class SFTPBrowser(QDockWidget):
         super().__init__("Remote Files", parent)
         self.tree_view = SFTPTreeView(self)
         self.model = QStandardItemModel()
-        self.model.setHorizontalHeaderLabels(["Remote Path"])
+        self.model.setHorizontalHeaderLabels(["Name", "Size", "Modified"])
         self.tree_view.setModel(self.model)
         self.tree_view.doubleClicked.connect(self.on_item_double_clicked)
         self.tree_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree_view.customContextMenuRequested.connect(self.show_context_menu)
+
+        # Clickable headers for sorting (sorting is applied manually in list_directory)
+        header = self.tree_view.header()
+        header.setSectionsClickable(True)
+        header.setSortIndicatorShown(True)
+        header.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
+        header.sectionClicked.connect(self.on_header_clicked)
+
         self.setWidget(self.tree_view)
         self.sftp = None
         self.current_path = "."
+        self.sort_column = 0   # 0=name, 1=size, 2=modified
+        self.sort_desc = False
 
     def _ensure_connected(self):
         if self.sftp is None:
@@ -164,6 +175,35 @@ class SFTPBrowser(QDockWidget):
         """Reload the listing for the current directory."""
         self.list_directory(self.current_path)
 
+    def on_header_clicked(self, column):
+        if column == self.sort_column:
+            self.sort_desc = not self.sort_desc
+        else:
+            self.sort_column = column
+            self.sort_desc = False
+        order = Qt.SortOrder.DescendingOrder if self.sort_desc else Qt.SortOrder.AscendingOrder
+        self.tree_view.header().setSortIndicator(column, order)
+        self.list_directory(self.current_path)
+
+    @staticmethod
+    def _format_size(num_bytes):
+        if num_bytes is None:
+            return ""
+        size = float(num_bytes)
+        for unit in ("B", "KB", "MB", "GB", "TB"):
+            if size < 1024 or unit == "TB":
+                return f"{int(size)} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+            size /= 1024
+
+    @staticmethod
+    def _format_mtime(mtime):
+        if not mtime:
+            return ""
+        try:
+            return time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))
+        except Exception:
+            return ""
+
     def list_directory(self, path):
         """Replace the view with the contents of `path` (a single directory level)."""
         if not self._ensure_connected():
@@ -176,7 +216,7 @@ class SFTPBrowser(QDockWidget):
 
         self.current_path = path
         self.model.clear()
-        self.model.setHorizontalHeaderLabels([f"Remote: {path}"])
+        self.model.setHorizontalHeaderLabels(["Name", "Size", "Modified"])
 
         # Parent ("..") entry, unless we are at the filesystem root
         if path not in ("/", ""):
@@ -185,28 +225,45 @@ class SFTPBrowser(QDockWidget):
             up_item.setData(posixpath.normpath(posixpath.join(path, "..")), PATH_ROLE)
             up_item.setData(True, ISDIR_ROLE)
             up_item.setData(True, PARENT_ROLE)
-            self.model.appendRow(up_item)
+            self.model.appendRow([up_item, QStandardItem(""), QStandardItem("")])
 
-        # Directories first, then files, each alphabetical
-        def sort_key(attr):
-            is_dir = stat.S_ISDIR(attr.st_mode) if attr.st_mode is not None else False
-            return (0 if is_dir else 1, attr.filename.lower())
+        def is_dir_of(attr):
+            return stat.S_ISDIR(attr.st_mode) if attr.st_mode is not None else False
 
-        for attr in sorted(entries, key=sort_key):
+        # Sort by the chosen column...
+        if self.sort_column == 1:
+            entries.sort(key=lambda a: a.st_size or 0, reverse=self.sort_desc)
+        elif self.sort_column == 2:
+            entries.sort(key=lambda a: a.st_mtime or 0, reverse=self.sort_desc)
+        else:
+            entries.sort(key=lambda a: a.filename.lower(), reverse=self.sort_desc)
+        # ...then keep directories grouped before files (stable, preserves order above)
+        entries.sort(key=lambda a: 0 if is_dir_of(a) else 1)
+
+        for attr in entries:
             name = attr.filename
-            is_dir = stat.S_ISDIR(attr.st_mode) if attr.st_mode is not None else False
+            is_dir = is_dir_of(attr)
             full_path = posixpath.join(path, name)
 
-            label = f"📁 {name}" if is_dir else f"   {name}"
-            item = QStandardItem(label)
-            item.setEditable(False)
-            item.setData(full_path, PATH_ROLE)
-            item.setData(is_dir, ISDIR_ROLE)
-            item.setData(False, PARENT_ROLE)
-            self.model.appendRow(item)
+            name_item = QStandardItem(f"📁 {name}" if is_dir else f"   {name}")
+            name_item.setEditable(False)
+            name_item.setData(full_path, PATH_ROLE)
+            name_item.setData(is_dir, ISDIR_ROLE)
+            name_item.setData(False, PARENT_ROLE)
+
+            size_text = "" if is_dir else self._format_size(attr.st_size)
+            size_item = QStandardItem(size_text)
+            size_item.setEditable(False)
+
+            mtime_item = QStandardItem(self._format_mtime(attr.st_mtime))
+            mtime_item.setEditable(False)
+
+            self.model.appendRow([name_item, size_item, mtime_item])
+
+        self.tree_view.resizeColumnToContents(0)
 
     def on_item_double_clicked(self, index):
-        item = self.model.itemFromIndex(index)
+        item = self.model.itemFromIndex(index.siblingAtColumn(0))
         if item is None:
             return
         path = item.data(PATH_ROLE)
@@ -240,7 +297,7 @@ class SFTPBrowser(QDockWidget):
         selected_files = self.selected_file_paths()
 
         if index.isValid():
-            item = self.model.itemFromIndex(index)
+            item = self.model.itemFromIndex(index.siblingAtColumn(0))
             is_dir = bool(item.data(ISDIR_ROLE))
             if is_dir and not item.data(PARENT_ROLE):
                 open_action = QAction("Open", self)
