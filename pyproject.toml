@@ -5,12 +5,12 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "omniterm"
 version = "0.1.0"
-description = "A cross-platform MobaXterm-style terminal: SSH, serial, and local sessions with an integrated SFTP browser."
+description = "A cross-platform terminal: SSH, serial, and local sessions with an integrated SFTP browser."
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "fbobe3", email = "fbobe3@gmail.com" }]
-keywords = ["terminal", "ssh", "serial", "sftp", "pty", "mobaxterm", "qt"]
+keywords = ["terminal", "ssh", "serial", "sftp", "pty", "qt"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: X11 Applications :: Qt",

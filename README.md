@@ -1,6 +1,6 @@
 # OmniTerm
 
-A cross-platform, [MobaXterm](https://mobaxterm.mobatek.net/)-style terminal built with PyQt6.
+A cross-platform terminal built with PyQt6.
 OmniTerm gives you SSH, serial, and local shell sessions in a tabbed interface, an
 integrated SFTP file browser, encrypted credential storage, and a dark theme out of the box.
 
