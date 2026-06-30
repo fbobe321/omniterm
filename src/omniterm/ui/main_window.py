@@ -113,27 +113,6 @@ class MainWindow(QMainWindow):
         self.shell_integration_action = self.settings_menu.addAction("Shell Integration Guide...")
         self.shell_integration_action.triggered.connect(self.show_shell_integration_dialog)
 
-        # Warn if running elevated on Windows (blocks drag/drop from Explorer)
-        self._warn_if_elevated()
-
-    def _warn_if_elevated(self):
-        if os.name != "nt":
-            return
-        try:
-            import ctypes
-            if ctypes.windll.shell32.IsUserAnAdmin():
-                QMessageBox.warning(
-                    self,
-                    "Running as Administrator",
-                    "OmniTerm is running elevated (as Administrator).\n\n"
-                    "Windows blocks drag-and-drop from a normal Explorer window into "
-                    "an elevated application. To drag files in, restart OmniTerm from a "
-                    "normal (non-Administrator) terminal.\n\n"
-                    "The right-click Upload/Download menu works either way."
-                )
-        except Exception:
-            pass
-
     def on_session_selected(self, index):
         item = self.session_dock.model.itemFromIndex(index)
         if not (item and item.data(32)): # Must be a node carrying session data
