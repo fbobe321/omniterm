@@ -35,6 +35,35 @@
         term.open(document.getElementById('terminal'));
         fitAddon.fit();
 
+        // Expose so the Python side can tweak appearance at runtime.
+        window.term = term;
+        window.fitAddon = fitAddon;
+
+        // Apply terminal appearance (font size / colors). Works across
+        // xterm.js 4.x (setOption) and 5.x (options.*).
+        window.applyTerminalSettings = function (settings) {
+            try {
+                if (typeof settings.fontSize === 'number') {
+                    if (term.options) { term.options.fontSize = settings.fontSize; }
+                    else { term.setOption('fontSize', settings.fontSize); }
+                }
+                if (typeof settings.fontFamily === 'string') {
+                    if (term.options) { term.options.fontFamily = settings.fontFamily; }
+                    else { term.setOption('fontFamily', settings.fontFamily); }
+                }
+                var base = (term.options && term.options.theme) ? term.options.theme : {};
+                var theme = Object.assign({}, base);
+                if (settings.foreground) { theme.foreground = settings.foreground; theme.cursor = settings.foreground; }
+                if (settings.background) {
+                    theme.background = settings.background;
+                    document.body.style.backgroundColor = settings.background;
+                }
+                if (term.options) { term.options.theme = theme; }
+                else { term.setOption('theme', theme); }
+                if (window.fitAddon) { window.fitAddon.fit(); }
+            } catch (e) { /* ignore */ }
+        };
+
         // QWebChannel setup
         new QWebChannel(qt.webChannelTransport, function (channel) {
             window.pybridge = channel.objects.pybridge;

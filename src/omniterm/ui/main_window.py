@@ -1,4 +1,6 @@
-from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox
+import os
+from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog
+from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt
 from omniterm.ui.session_dock import SessionDock
 from omniterm.ui.terminal_tab import TerminalTab
@@ -6,7 +8,7 @@ from omniterm.ui.sftp_browser import SFTPBrowser
 from omniterm.core.ssh_client import SSHWorker
 from omniterm.core.serial_client import SerialWorker
 from omniterm.core.local_pty import LocalPTYWorker
-from omniterm.core.config import HOME_DIR, set_home_dir, init_cipher, set_shared_sessions_file
+from omniterm.core.config import HOME_DIR, set_home_dir, init_cipher, set_shared_sessions_file, get_terminal_settings, set_terminal_settings
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -98,6 +100,8 @@ class MainWindow(QMainWindow):
         self.add_session_action.triggered.connect(self.show_add_session_dialog)
 
         self.settings_menu = self.menu_bar.addMenu("&Settings")
+        self.terminal_appearance_action = self.settings_menu.addAction("Terminal Appearance...")
+        self.terminal_appearance_action.triggered.connect(self.show_terminal_appearance_dialog)
         self.set_home_dir_action = self.settings_menu.addAction("Set Persistent Home Directory...")
         self.set_home_dir_action.triggered.connect(self.show_set_home_dir_dialog)
         self.set_master_password_action = self.settings_menu.addAction("Set Master Password...")
@@ -108,6 +112,27 @@ class MainWindow(QMainWindow):
         self.manage_plugins_action.triggered.connect(self.show_plugin_manager_dialog)
         self.shell_integration_action = self.settings_menu.addAction("Shell Integration Guide...")
         self.shell_integration_action.triggered.connect(self.show_shell_integration_dialog)
+
+        # Warn if running elevated on Windows (blocks drag/drop from Explorer)
+        self._warn_if_elevated()
+
+    def _warn_if_elevated(self):
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+            if ctypes.windll.shell32.IsUserAnAdmin():
+                QMessageBox.warning(
+                    self,
+                    "Running as Administrator",
+                    "OmniTerm is running elevated (as Administrator).\n\n"
+                    "Windows blocks drag-and-drop from a normal Explorer window into "
+                    "an elevated application. To drag files in, restart OmniTerm from a "
+                    "normal (non-Administrator) terminal.\n\n"
+                    "The right-click Upload/Download menu works either way."
+                )
+        except Exception:
+            pass
 
     def on_session_selected(self, index):
         item = self.session_dock.model.itemFromIndex(index)
@@ -126,6 +151,7 @@ class MainWindow(QMainWindow):
         session_name = session_data.get("name", "Unnamed Session")
 
         tab = TerminalTab(session_name)
+        tab.apply_settings(get_terminal_settings())
         self.tabs.addTab(tab, session_name)
         self.tabs.setCurrentWidget(tab)
 
@@ -279,8 +305,70 @@ class MainWindow(QMainWindow):
         
         dialog.exec()
 
+    def show_terminal_appearance_dialog(self):
+        settings = get_terminal_settings()
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Terminal Appearance")
+        layout = QFormLayout(dialog)
+
+        # Font size
+        size_spin = QSpinBox()
+        size_spin.setRange(6, 48)
+        size_spin.setValue(int(settings.get("fontSize", 14)))
+        layout.addRow("Font Size:", size_spin)
+
+        # Colors held in a mutable dict so the picker callbacks can update them
+        colors = {
+            "foreground": settings.get("foreground", "#ffffff"),
+            "background": settings.get("background", "#1e1e1e"),
+        }
+
+        def make_color_row(label, key):
+            btn = QPushButton(colors[key])
+
+            def update_btn():
+                btn.setText(colors[key])
+                btn.setStyleSheet(f"background-color: {colors[key]}; color: #000;")
+
+            def pick():
+                chosen = QColorDialog.getColor(QColor(colors[key]), dialog, f"Select {label}")
+                if chosen.isValid():
+                    colors[key] = chosen.name()
+                    update_btn()
+
+            btn.clicked.connect(pick)
+            update_btn()
+            layout.addRow(f"{label}:", btn)
+
+        make_color_row("Text Color", "foreground")
+        make_color_row("Background Color", "background")
+
+        def save():
+            new_settings = {
+                "fontSize": size_spin.value(),
+                "foreground": colors["foreground"],
+                "background": colors["background"],
+            }
+            set_terminal_settings(new_settings)
+            self.apply_terminal_settings_to_open_tabs()
+            dialog.accept()
+
+        btn_save = QPushButton("Apply")
+        btn_save.clicked.connect(save)
+        layout.addRow(btn_save)
+
+        dialog.exec()
+
+    def apply_terminal_settings_to_open_tabs(self):
+        settings = get_terminal_settings()
+        for i in range(self.tabs.count()):
+            widget = self.tabs.widget(i)
+            if hasattr(widget, "apply_settings"):
+                widget.apply_settings(settings)
+
     def show_shell_integration_dialog(self):
-        QMessageBox.information(self, "Shell Integration", 
+        QMessageBox.information(self, "Shell Integration",
                                "To integrate Omniterm into Windows Explorer:\n\n1. Open Registry Editor (regedit)\n2. Navigate to HKEY_CLASSES_ROOT\\Directory\\shell\n3. Create a key 'OmniTerm'\n4. Set (Default) to 'Open in OmniTerm'\n5. Create a subkey 'command' and set (Default) to '\"C:\\Path\\To\\omniterm.exe\" \"%1\"'")
         
     def show_set_master_password_dialog(self):

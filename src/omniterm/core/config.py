@@ -65,6 +65,40 @@ def get_shared_sessions_file():
             pass
     return None
 
+DEFAULT_TERMINAL_SETTINGS = {
+    "fontSize": 14,
+    "fontFamily": "Consolas, 'DejaVu Sans Mono', monospace",
+    "foreground": "#ffffff",
+    "background": "#1e1e1e",
+}
+
+def get_terminal_settings():
+    settings = dict(DEFAULT_TERMINAL_SETTINGS)
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+                stored = config.get("terminal")
+                if isinstance(stored, dict):
+                    settings.update({k: v for k, v in stored.items() if v is not None})
+        except (json.JSONDecodeError, IOError):
+            pass
+    return settings
+
+def set_terminal_settings(settings):
+    config = {}
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    merged = dict(config["terminal"]) if isinstance(config.get("terminal"), dict) else {}
+    merged.update(settings)
+    config["terminal"] = merged
+    with open(GLOBAL_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
 def get_salt():
     if SALT_FILE.exists():
         return SALT_FILE.read_bytes()

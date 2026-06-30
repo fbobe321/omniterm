@@ -3,6 +3,7 @@ from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QUrl
 import os
+import json
 from omniterm.core.serial_client import SerialWorker
 
 class PyBridge(QObject):
@@ -33,12 +34,35 @@ class TerminalTab(QWidget):
         self.channel.registerObject("pybridge", self.bridge)
         self.web_view.page().setWebChannel(self.channel)
 
+        # Appearance settings, applied once the page has loaded
+        self._settings = None
+        self._page_loaded = False
+        self.web_view.loadFinished.connect(self._on_load_finished)
+
         # Load local index.html
         file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "xterm", "index.html"))
         self.web_view.setUrl(QUrl.fromLocalFile(file_path))
 
         # Worker management
         self.worker = None
+
+    def _on_load_finished(self, ok):
+        self._page_loaded = bool(ok)
+        if self._page_loaded and self._settings is not None:
+            self._run_apply(self._settings)
+
+    def apply_settings(self, settings):
+        """Apply terminal appearance (font size / family / colors). Stored and
+        re-applied automatically once the web page finishes loading."""
+        self._settings = settings
+        if self._page_loaded:
+            self._run_apply(settings)
+
+    def _run_apply(self, settings):
+        payload = json.dumps(settings)
+        self.web_view.page().runJavaScript(
+            f"if (window.applyTerminalSettings) {{ window.applyTerminalSettings({payload}); }}"
+        )
 
     def set_worker(self, worker):
         self.worker = worker
