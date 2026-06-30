@@ -170,6 +170,47 @@ def save_sessions(data):
     with open(target_file, "w") as f:
         json.dump(data, f, indent=2)
 
+def delete_session(session_id):
+    """Remove the session with the given id, searching nested folders too.
+    Returns True if a session was removed."""
+    data = load_sessions()
+    removed = [False]
+
+    def prune(session_list):
+        kept = []
+        for s in session_list:
+            if s.get("id") == session_id:
+                removed[0] = True
+                continue
+            if s.get("type") == "folder":
+                s["children"] = prune(s.get("children", []))
+            kept.append(s)
+        return kept
+
+    data["sessions"] = prune(data.get("sessions", []))
+    if removed[0]:
+        save_sessions(data)
+    return removed[0]
+
+def export_sessions(path, include_secrets=False):
+    """Write the session config to `path`. By default encrypted password
+    tokens are stripped so the exported file is safe to share/back up."""
+    import copy
+    data = copy.deepcopy(load_sessions())
+
+    def scrub(session_list):
+        for s in session_list:
+            if not include_secrets:
+                s.pop("password", None)
+            if s.get("type") == "folder":
+                scrub(s.get("children", []))
+
+    if not include_secrets:
+        scrub(data.get("sessions", []))
+
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
 def load_plugins():
     plugin_dir = HOME_DIR / "plugins"
     if not plugin_dir.exists():

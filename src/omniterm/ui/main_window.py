@@ -8,7 +8,7 @@ from omniterm.ui.sftp_browser import SFTPBrowser
 from omniterm.core.ssh_client import SSHWorker
 from omniterm.core.serial_client import SerialWorker
 from omniterm.core.local_pty import LocalPTYWorker
-from omniterm.core.config import HOME_DIR, set_home_dir, init_cipher, set_shared_sessions_file, get_terminal_settings, set_terminal_settings
+from omniterm.core.config import HOME_DIR, set_home_dir, init_cipher, set_shared_sessions_file, get_terminal_settings, set_terminal_settings, export_sessions
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -98,6 +98,8 @@ class MainWindow(QMainWindow):
         self.session_menu = self.menu_bar.addMenu("&Sessions")
         self.add_session_action = self.session_menu.addAction("Add Session")
         self.add_session_action.triggered.connect(self.show_add_session_dialog)
+        self.export_sessions_action = self.session_menu.addAction("Export Sessions...")
+        self.export_sessions_action.triggered.connect(self.export_sessions_to_file)
 
         self.settings_menu = self.menu_bar.addMenu("&Settings")
         self.terminal_appearance_action = self.settings_menu.addAction("Terminal Appearance...")
@@ -338,6 +340,28 @@ class MainWindow(QMainWindow):
         layout.addRow(btn_save)
 
         dialog.exec()
+
+    def export_sessions_to_file(self):
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, "Export Sessions", "omniterm_sessions.json", "JSON Files (*.json)")
+        if not file_path:
+            return
+
+        include = QMessageBox.question(
+            self, "Include Passwords?",
+            "Include saved passwords in the export?\n\n"
+            "Yes: passwords are included (still encrypted; only usable with your "
+            "master password / key on this machine).\n"
+            "No: passwords are stripped (recommended for sharing or backup).",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        ) == QMessageBox.StandardButton.Yes
+
+        try:
+            export_sessions(file_path, include_secrets=include)
+            QMessageBox.information(self, "Export Complete", f"Sessions exported to:\n{file_path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Export Failed", str(e))
 
     def apply_terminal_settings_to_open_tabs(self):
         settings = get_terminal_settings()
