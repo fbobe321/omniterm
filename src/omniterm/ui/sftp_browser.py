@@ -1,9 +1,10 @@
-from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog
-from PyQt6.QtGui import QStandardItemModel, QStandardItem, QAction
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView
+from PyQt6.QtGui import QStandardItemModel, QStandardItem, QAction, QDrag
+from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl
 import os
 import stat
 import posixpath
+import tempfile
 
 # Custom item data roles
 PATH_ROLE = 32      # full remote path for the entry
@@ -11,13 +12,110 @@ ISDIR_ROLE = 33     # bool: True if the entry is a directory
 PARENT_ROLE = 34    # bool: True for the ".." navigation entry
 
 
+class SFTPTreeView(QTreeView):
+    """Tree view that supports dragging remote files out to the OS file manager
+    and dropping local files in from it."""
+
+    def __init__(self, browser):
+        super().__init__()
+        self.browser = browser
+        self.setRootIsDecorated(False)  # flat directory listing, not a lazy tree
+        self.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.setDragEnabled(True)
+        self.setAcceptDrops(True)
+        self.setDropIndicatorShown(True)
+        self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+
+    # --- Drag OUT (remote -> OS file manager): download to temp, hand over local URLs ---
+    def startDrag(self, supportedActions):
+        if self.browser.sftp is None:
+            return
+
+        remote_files = []
+        seen = set()
+        for index in self.selectedIndexes():
+            if index.column() != 0:
+                continue
+            item = self.browser.model.itemFromIndex(index)
+            if item is None or item.data(ISDIR_ROLE):
+                continue  # only files can be dragged out (directories skipped)
+            path = item.data(PATH_ROLE)
+            if path and path not in seen:
+                seen.add(path)
+                remote_files.append(path)
+
+        if not remote_files:
+            return
+
+        if not self.browser._ensure_connected():
+            return
+
+        temp_dir = tempfile.mkdtemp(prefix="omniterm_sftp_")
+        local_urls = []
+        for remote_path in remote_files:
+            local_path = os.path.join(temp_dir, posixpath.basename(remote_path))
+            try:
+                self.browser.sftp.get(remote_path, local_path)
+                local_urls.append(QUrl.fromLocalFile(local_path))
+            except Exception as e:
+                self.browser.error_occurred.emit(f"Download Error: {e}")
+
+        if not local_urls:
+            return
+
+        mime = QMimeData()
+        mime.setUrls(local_urls)
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        drag.exec(Qt.DropAction.CopyAction)
+
+    # --- Drag IN (OS file manager -> remote): upload dropped files ---
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+        else:
+            super().dragMoveEvent(event)
+
+    def dropEvent(self, event):
+        mime = event.mimeData()
+        if not mime.hasUrls():
+            super().dropEvent(event)
+            return
+
+        # Ignore drops originating from within this view (those are drag-outs)
+        if event.source() is self:
+            event.ignore()
+            return
+
+        local_paths = [u.toLocalFile() for u in mime.urls() if u.isLocalFile()]
+        local_paths = [p for p in local_paths if p]
+        if not local_paths:
+            return
+
+        # Determine the target directory: a folder under the cursor, else the current dir
+        target_dir = self.browser.current_path
+        index = self.indexAt(event.position().toPoint())
+        if index.isValid():
+            item = self.browser.model.itemFromIndex(index)
+            if item is not None and item.data(ISDIR_ROLE):
+                target_dir = item.data(PATH_ROLE)
+
+        event.acceptProposedAction()
+        self.browser.upload_local_paths(local_paths, target_dir)
+
+
 class SFTPBrowser(QDockWidget):
     error_occurred = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__("Remote Files", parent)
-        self.tree_view = QTreeView()
-        self.tree_view.setRootIsDecorated(False)  # flat directory listing, not a lazy tree
+        self.tree_view = SFTPTreeView(self)
         self.model = QStandardItemModel()
         self.model.setHorizontalHeaderLabels(["Remote Path"])
         self.tree_view.setModel(self.model)
@@ -158,12 +256,32 @@ class SFTPBrowser(QDockWidget):
     def upload_to_current(self):
         if not self._ensure_connected():
             return
-        local_path, _ = QFileDialog.getOpenFileName(self, "Select File to Upload")
-        if local_path:
+        local_paths, _ = QFileDialog.getOpenFileNames(self, "Select File(s) to Upload")
+        if local_paths:
+            self.upload_local_paths(local_paths, self.current_path)
+
+    def upload_local_paths(self, local_paths, remote_dir):
+        """Upload one or more local files/folders into remote_dir, recursing into
+        directories. Refreshes the view if the upload landed in the current dir."""
+        if not self._ensure_connected():
+            return
+        for local_path in local_paths:
             try:
-                filename = os.path.basename(local_path)
-                remote_path = posixpath.join(self.current_path, filename)
-                self.sftp.put(local_path, remote_path)
-                self.refresh()  # show the new file
+                self._upload_recursive(local_path, remote_dir)
             except Exception as e:
                 self.error_occurred.emit(f"Upload Error: {e}")
+        if remote_dir == self.current_path:
+            self.refresh()
+
+    def _upload_recursive(self, local_path, remote_dir):
+        name = os.path.basename(local_path.rstrip("/\\")) or local_path
+        remote_path = posixpath.join(remote_dir, name)
+        if os.path.isdir(local_path):
+            try:
+                self.sftp.mkdir(remote_path)
+            except Exception:
+                pass  # directory may already exist
+            for entry in sorted(os.listdir(local_path)):
+                self._upload_recursive(os.path.join(local_path, entry), remote_path)
+        else:
+            self.sftp.put(local_path, remote_path)
