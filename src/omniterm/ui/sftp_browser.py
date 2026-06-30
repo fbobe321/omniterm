@@ -25,6 +25,9 @@ class SFTPTreeView(QTreeView):
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
         self.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+        self.setDefaultDropAction(Qt.DropAction.CopyAction)
+        # Drops are delivered to the viewport for item views; it must accept them too.
+        self.viewport().setAcceptDrops(True)
 
     # --- Drag OUT (remote -> OS file manager): download to temp, hand over local URLs ---
     def startDrag(self, supportedActions):
@@ -71,14 +74,16 @@ class SFTPTreeView(QTreeView):
 
     # --- Drag IN (OS file manager -> remote): upload dropped files ---
     def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
+        if event.mimeData().hasUrls() and event.source() is not self:
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
         else:
             super().dragEnterEvent(event)
 
     def dragMoveEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
+        if event.mimeData().hasUrls() and event.source() is not self:
+            event.setDropAction(Qt.DropAction.CopyAction)
+            event.accept()
         else:
             super().dragMoveEvent(event)
 
@@ -214,9 +219,25 @@ class SFTPBrowser(QDockWidget):
             # Double-clicking a file downloads it
             self.download_path(path)
 
+    def selected_file_paths(self):
+        """Remote paths of every selected entry that is a regular file."""
+        paths = []
+        seen = set()
+        for index in self.tree_view.selectionModel().selectedRows():
+            item = self.model.itemFromIndex(index)
+            if item is None or item.data(ISDIR_ROLE):
+                continue
+            path = item.data(PATH_ROLE)
+            if path and path not in seen:
+                seen.add(path)
+                paths.append(path)
+        return paths
+
     def show_context_menu(self, position):
         index = self.tree_view.indexAt(position)
         menu = QMenu()
+
+        selected_files = self.selected_file_paths()
 
         if index.isValid():
             item = self.model.itemFromIndex(index)
@@ -225,13 +246,18 @@ class SFTPBrowser(QDockWidget):
                 open_action = QAction("Open", self)
                 open_action.triggered.connect(lambda: self.list_directory(item.data(PATH_ROLE)))
                 menu.addAction(open_action)
-            elif not is_dir:
-                download_action = QAction("Download", self)
-                download_action.triggered.connect(lambda: self.download_path(item.data(PATH_ROLE)))
-                menu.addAction(download_action)
 
-        # Upload always targets the current directory
-        upload_action = QAction("Upload Here", self)
+        if len(selected_files) > 1:
+            download_action = QAction(f"Download {len(selected_files)} Files...", self)
+            download_action.triggered.connect(lambda: self.download_files(selected_files))
+            menu.addAction(download_action)
+        elif len(selected_files) == 1:
+            download_action = QAction("Download...", self)
+            download_action.triggered.connect(lambda: self.download_path(selected_files[0]))
+            menu.addAction(download_action)
+
+        # Upload always targets the current directory (supports multiple files)
+        upload_action = QAction("Upload Files Here...", self)
         upload_action.triggered.connect(self.upload_to_current)
         menu.addAction(upload_action)
 
@@ -240,6 +266,26 @@ class SFTPBrowser(QDockWidget):
         menu.addAction(refresh_action)
 
         menu.exec(self.tree_view.mapToGlobal(position))
+
+    def download_files(self, remote_paths):
+        """Download several files at once into a chosen local directory."""
+        if not self._ensure_connected():
+            return
+        if not remote_paths:
+            return
+        target_dir = QFileDialog.getExistingDirectory(self, "Select Download Folder")
+        if not target_dir:
+            return
+        errors = 0
+        for remote_path in remote_paths:
+            local_path = os.path.join(target_dir, posixpath.basename(remote_path))
+            try:
+                self.sftp.get(remote_path, local_path)
+            except Exception as e:
+                errors += 1
+                self.error_occurred.emit(f"Download Error ({posixpath.basename(remote_path)}): {e}")
+        if errors == 0:
+            self.error_occurred.emit(f"Downloaded {len(remote_paths)} file(s) to {target_dir}")
 
     def download_path(self, remote_path):
         if not self._ensure_connected():

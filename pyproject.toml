@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omniterm"
-version = "0.1.4"
+version = "0.1.5"
 description = "A cross-platform terminal: SSH, serial, and local sessions with an integrated SFTP browser."
 readme = "README.md"
 requires-python = ">=3.9"
