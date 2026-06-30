@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="stylesheet" type="text/css" href="xterm.css">
+    <script src="xterm.js"></script>
+    <script src="xterm-addon-fit.js"></script>
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+            background-color: #1e1e1e;
+            overflow: hidden;
+        }
+        #terminal {
+            height: 100%;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="terminal"></div>
+    <script>
+        var term = new Terminal({
+            cursorBlink: true,
+            theme: {
+                background: '#1e1e1e',
+                foreground: '#ffffff'
+            }
+        });
+        var fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(fitAddon);
+        term.open(document.getElementById('terminal'));
+        fitAddon.fit();
+
+        // QWebChannel setup
+        new QWebChannel(qt.webChannelTransport, function (channel) {
+            window.pybridge = channel.objects.pybridge;
+            
+            // Listen for data from Python
+            pybridge.onDataReceived.connect(function(data) {
+                term.write(data);
+            });
+
+            // Send keystrokes to Python
+            term.onData(function(data) {
+                pybridge.sendData(data);
+            });
+        });
+
+        window.addEventListener('resize', function() {
+            fitAddon.fit();
+        });
+    </script>
+</body>
+</html>

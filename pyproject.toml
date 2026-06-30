@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omniterm"
+version = "0.1.0"
+description = "A cross-platform MobaXterm-style terminal: SSH, serial, and local sessions with an integrated SFTP browser."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "fbobe3", email = "fbobe3@gmail.com" }]
+keywords = ["terminal", "ssh", "serial", "sftp", "pty", "mobaxterm", "qt"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Terminals :: Terminal Emulators/X Terminals",
+    "Topic :: System :: Networking",
+]
+dependencies = [
+    "PyQt6",
+    "PyQt6-WebEngine",
+    "paramiko",
+    "pyserial",
+    "keyring",
+    "cryptography",
+    "pywinpty; sys_platform == 'win32'",
+]
+
+[project.urls]
+Homepage = "https://github.com/fbobe321/omniterm"
+Repository = "https://github.com/fbobe321/omniterm"
+Issues = "https://github.com/fbobe321/omniterm/issues"
+
+[project.scripts]
+omniterm = "omniterm.main:main"
+
+[project.gui-scripts]
+omniterm-gui = "omniterm.main:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+omniterm = ["static/**/*", "static/xterm/*"]

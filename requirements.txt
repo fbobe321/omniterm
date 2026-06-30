@@ -1,0 +1,7 @@
+PyQt6
+PyQt6-WebEngine
+paramiko
+pyserial
+keyring
+cryptography
+pywinpty

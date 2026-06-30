@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Node (vendored xterm build deps, not needed at runtime)
+node_modules/
+
+# OmniTerm local state
+.omniterm_sessions.json
+.omniterm_key
+.omniterm_salt
+.omniterm_global.json
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
