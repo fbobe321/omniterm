@@ -402,7 +402,7 @@ class MainWindow(QMainWindow):
         layout.addRow(btn)
         dialog.exec()
 
-    def save_new_session(self, name, stype, host, user, port, auth_method, password, key_path, com, baud, data_bits, parity, stop_bits, dialog):
+    def save_new_session(self, name, stype, host, user, port, auth_method, password, key_path, tunnel, startup, com, baud, data_bits, parity, stop_bits, dialog):
         from omniterm.core.config import load_sessions, save_sessions, encrypt_password
         import uuid
 
@@ -415,15 +415,21 @@ class MainWindow(QMainWindow):
 
         if stype == "ssh":
             new_session.update({
-                "host": host, 
-                "user": user, 
-                "port": int(port) if port.isdigit() else 22, 
+                "host": host,
+                "user": user,
+                "port": int(port) if port.isdigit() else 22,
                 "auth_method": auth_method
             })
             if auth_method == "password" and password:
                 new_session["password"] = encrypt_password(password)
             elif auth_method == "key":
                 new_session["key_path"] = key_path
+
+            tunnels = self.parse_tunnels(tunnel)
+            if tunnels:
+                new_session["tunnels"] = tunnels
+            if startup.strip():
+                new_session["startup_script"] = startup.strip()
         elif stype == "serial":
             new_session.update({
                 "com_port": com, 
@@ -437,3 +443,24 @@ class MainWindow(QMainWindow):
         save_sessions(data)
         self.session_dock.load_sessions_into_tree()
         dialog.accept()
+
+    def parse_tunnels(self, text):
+        """Parse 'local_port:remote_host:remote_port' entries (comma separated)
+        into a list of tunnel config dicts. Malformed entries are skipped."""
+        tunnels = []
+        for entry in text.split(","):
+            entry = entry.strip()
+            if not entry:
+                continue
+            parts = entry.split(":")
+            if len(parts) != 3:
+                continue
+            local_port, remote_host, remote_port = (p.strip() for p in parts)
+            if not (local_port.isdigit() and remote_port.isdigit()):
+                continue
+            tunnels.append({
+                "local_port": int(local_port),
+                "remote_host": remote_host,
+                "remote_port": int(remote_port),
+            })
+        return tunnels
