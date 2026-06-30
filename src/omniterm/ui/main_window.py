@@ -297,37 +297,48 @@ class MainWindow(QMainWindow):
         size_spin.setValue(int(settings.get("fontSize", 14)))
         layout.addRow("Font Size:", size_spin)
 
-        # Colors held in a mutable dict so the picker callbacks can update them
-        colors = {
-            "foreground": settings.get("foreground", "#ffffff"),
-            "background": settings.get("background", "#1e1e1e"),
-        }
+        # Preset palette (name -> hex)
+        palette = [
+            ("White", "#ffffff"),
+            ("Black", "#000000"),
+            ("Dark Gray", "#1e1e1e"),
+            ("Gray", "#808080"),
+            ("Red", "#ff5555"),
+            ("Green", "#50fa7b"),
+            ("Yellow", "#f1fa8c"),
+            ("Blue", "#5599ff"),
+            ("Cyan", "#8be9fd"),
+            ("Magenta", "#ff79c6"),
+            ("Orange", "#ffb86c"),
+        ]
 
-        def make_color_row(label, key):
-            btn = QPushButton(colors[key])
+        def make_color_combo(current_hex):
+            combo = QComboBox()
+            entries = list(palette)
+            # Ensure the current value is selectable even if it's not a preset
+            if current_hex.lower() not in [h.lower() for _, h in entries]:
+                entries.insert(0, (f"Custom ({current_hex})", current_hex))
+            for name, hex_val in entries:
+                combo.addItem(f"{name}  {hex_val}", hex_val)
+                idx = combo.count() - 1
+                combo.setItemData(idx, QColor(hex_val), Qt.ItemDataRole.DecorationRole)
+            # Select the current value
+            for i in range(combo.count()):
+                if combo.itemData(i).lower() == current_hex.lower():
+                    combo.setCurrentIndex(i)
+                    break
+            return combo
 
-            def update_btn():
-                btn.setText(colors[key])
-                btn.setStyleSheet(f"background-color: {colors[key]}; color: #000;")
-
-            def pick():
-                chosen = QColorDialog.getColor(QColor(colors[key]), dialog, f"Select {label}")
-                if chosen.isValid():
-                    colors[key] = chosen.name()
-                    update_btn()
-
-            btn.clicked.connect(pick)
-            update_btn()
-            layout.addRow(f"{label}:", btn)
-
-        make_color_row("Text Color", "foreground")
-        make_color_row("Background Color", "background")
+        fg_combo = make_color_combo(settings.get("foreground", "#ffffff"))
+        bg_combo = make_color_combo(settings.get("background", "#1e1e1e"))
+        layout.addRow("Text Color:", fg_combo)
+        layout.addRow("Background Color:", bg_combo)
 
         def save():
             new_settings = {
                 "fontSize": size_spin.value(),
-                "foreground": colors["foreground"],
-                "background": colors["background"],
+                "foreground": fg_combo.currentData(),
+                "background": bg_combo.currentData(),
             }
             set_terminal_settings(new_settings)
             self.apply_terminal_settings_to_open_tabs()
