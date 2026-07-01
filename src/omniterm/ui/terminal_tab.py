@@ -1,10 +1,43 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebChannel import QWebChannel
-from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QUrl
+from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QUrl, Qt
 import os
 import json
 from omniterm.core.serial_client import SerialWorker
+
+
+class SplitContainer(QWidget):
+    """Holds 1, 2, or 4 terminal panes in resizable splitters. `terminals`
+    lists the TerminalTab widgets so the window can manage/close them."""
+
+    def __init__(self, count, parent=None):
+        super().__init__(parent)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.terminals = []
+
+        if count <= 1:
+            self.root = QSplitter(Qt.Orientation.Horizontal)
+            self._targets = [self.root]
+        elif count == 2:
+            self.root = QSplitter(Qt.Orientation.Horizontal)
+            self._targets = [self.root, self.root]
+        else:  # 4 -> 2x2
+            self.root = QSplitter(Qt.Orientation.Vertical)
+            top = QSplitter(Qt.Orientation.Horizontal)
+            bottom = QSplitter(Qt.Orientation.Horizontal)
+            self.root.addWidget(top)
+            self.root.addWidget(bottom)
+            self._targets = [top, top, bottom, bottom]
+
+        outer.addWidget(self.root)
+
+    def add_terminal(self, widget):
+        idx = len(self.terminals)
+        if idx < len(self._targets):
+            self._targets[idx].addWidget(widget)
+            self.terminals.append(widget)
 
 class PyBridge(QObject):
     onDataReceived = pyqtSignal(str)

@@ -1,9 +1,9 @@
 import os
-from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog
+from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QToolButton
 from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt
 from omniterm.ui.session_dock import SessionDock
-from omniterm.ui.terminal_tab import TerminalTab
+from omniterm.ui.terminal_tab import TerminalTab, SplitContainer
 from omniterm.ui.sftp_browser import SFTPBrowser
 from omniterm.core.ssh_client import SSHWorker
 from omniterm.core.serial_client import SerialWorker
@@ -79,6 +79,13 @@ class MainWindow(QMainWindow):
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.setCentralWidget(self.tabs)
 
+        # "Split" button in the tab bar corner: open 1/2/4 terminals side by side
+        self.split_button = QToolButton()
+        self.split_button.setText("▦ Split")
+        self.split_button.setToolTip("Open multiple sessions in a split view (1 / 2 / 4 panes)")
+        self.split_button.clicked.connect(self.show_split_view_dialog)
+        self.tabs.setCornerWidget(self.split_button, Qt.Corner.TopRightCorner)
+
         # Session Dock
         self.session_dock = SessionDock(self)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.session_dock)
@@ -117,6 +124,58 @@ class MainWindow(QMainWindow):
         self.shell_integration_action = self.settings_menu.addAction("Shell Integration Guide...")
         self.shell_integration_action.triggered.connect(self.show_shell_integration_dialog)
 
+    def show_split_view_dialog(self):
+        from omniterm.core.config import load_sessions
+
+        flat = []
+        def walk(session_list):
+            for s in session_list:
+                if s.get("type") == "folder":
+                    walk(s.get("children", []))
+                else:
+                    flat.append(s)
+        walk(load_sessions().get("sessions", []))
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Split View")
+        layout = QFormLayout(dialog)
+
+        count_combo = QComboBox()
+        count_combo.addItems(["1", "2", "4"])
+        count_combo.setCurrentText("2")
+        layout.addRow("Panes:", count_combo)
+
+        pickers = []
+        for i in range(4):
+            combo = QComboBox()
+            combo.addItem("Local Terminal", {"name": "Local Terminal", "type": "local"})
+            for s in flat:
+                combo.addItem(f"{s.get('name', 'Unnamed')} ({s.get('type', '?')})", s)
+            pickers.append(combo)
+            layout.addRow(f"Pane {i + 1}:", combo)
+
+        # Row 0 is the count combo; pane rows are 1..4
+        def update_rows():
+            n = int(count_combo.currentText())
+            for i in range(4):
+                layout.setRowVisible(i + 1, i < n)
+            dialog.adjustSize()
+
+        count_combo.currentTextChanged.connect(update_rows)
+        update_rows()
+
+        def open_it():
+            n = int(count_combo.currentText())
+            sessions = [pickers[i].currentData() for i in range(n)]
+            dialog.accept()
+            self.open_split_tab(n, sessions)
+
+        btn = QPushButton("Open")
+        btn.clicked.connect(open_it)
+        layout.addRow(btn)
+
+        dialog.exec()
+
     def on_session_selected(self, index):
         item = self.session_dock.model.itemFromIndex(index)
         if not (item and item.data(32)): # Must be a node carrying session data
@@ -130,15 +189,12 @@ class MainWindow(QMainWindow):
         session_type = session_data.get("type", "local")
         self.create_terminal_tab(session_type, session_data)
 
-    def create_terminal_tab(self, session_type, session_data):
-        session_name = session_data.get("name", "Unnamed Session")
-
-        tab = TerminalTab(session_name)
+    def build_terminal(self, session_type, session_data, hook_sftp=True):
+        """Create a TerminalTab, start its worker, and apply appearance
+        settings. Does not add it to the tab widget (the caller places it)."""
+        tab = TerminalTab(session_data.get("name", "Unnamed Session"))
         tab.apply_settings(get_terminal_settings())
-        self.tabs.addTab(tab, session_name)
-        self.tabs.setCurrentWidget(tab)
 
-        # Worker Factory
         worker = None
         if session_type == "ssh":
             worker = SSHWorker(session_data)
@@ -155,30 +211,60 @@ class MainWindow(QMainWindow):
 
         if worker:
             tab.set_worker(worker)
-            if isinstance(worker, SSHWorker):
+            if isinstance(worker, SSHWorker) and hook_sftp:
                 worker.auth_success.connect(lambda: self.sftp_browser.connect_sftp(worker))
                 self.sftp_browser.error_occurred.connect(lambda msg: self.show_sftp_error(msg))
             worker.start()
 
         return tab
 
+    def create_terminal_tab(self, session_type, session_data):
+        session_name = session_data.get("name", "Unnamed Session")
+        tab = self.build_terminal(session_type, session_data)
+        self.tabs.addTab(tab, session_name)
+        self.tabs.setCurrentWidget(tab)
+        return tab
+
+    def open_split_tab(self, count, sessions):
+        """Open a single tab split into `count` panes, one terminal per given
+        session dict."""
+        container = SplitContainer(count)
+        sftp_hooked = False
+        for session_data in sessions:
+            session_type = session_data.get("type", "local")
+            hook = (session_type == "ssh" and not sftp_hooked)
+            term = self.build_terminal(session_type, session_data, hook_sftp=hook)
+            if hook:
+                sftp_hooked = True
+            container.add_terminal(term)
+
+        self.tabs.addTab(container, f"Split x{count}")
+        self.tabs.setCurrentWidget(container)
+        return container
+
+    def _stop_terminal(self, term):
+        worker = getattr(term, "worker", None)
+        if not worker:
+            return
+        try:
+            worker.data_received.disconnect()
+            worker.error_occurred.disconnect()
+            if hasattr(worker, "auth_success"):
+                worker.auth_success.disconnect()
+        except (TypeError, RuntimeError):
+            pass
+        worker.stop()
+        worker.wait()
+
     def close_tab(self, index):
         widget = self.tabs.widget(index)
         if widget:
-            if hasattr(widget, 'worker') and widget.worker:
-                worker = widget.worker
-                # Disconnect signals to prevent leaks
-                try:
-                    worker.data_received.disconnect()
-                    worker.error_occurred.disconnect()
-                    if hasattr(worker, 'auth_success'):
-                        worker.auth_success.disconnect()
-                except (TypeError, RuntimeError):
-                    # Signal might already be disconnected or worker is already dead
-                    pass
-                
-                worker.stop()
-                worker.wait()
+            terminals = getattr(widget, "terminals", None)
+            if terminals is not None:
+                for term in terminals:
+                    self._stop_terminal(term)
+            else:
+                self._stop_terminal(widget)
             self.tabs.removeTab(index)
             widget.deleteLater()
 
@@ -385,7 +471,12 @@ class MainWindow(QMainWindow):
         settings = get_terminal_settings()
         for i in range(self.tabs.count()):
             widget = self.tabs.widget(i)
-            if hasattr(widget, "apply_settings"):
+            terminals = getattr(widget, "terminals", None)
+            if terminals is not None:
+                for term in terminals:
+                    if hasattr(term, "apply_settings"):
+                        term.apply_settings(settings)
+            elif hasattr(widget, "apply_settings"):
                 widget.apply_settings(settings)
 
     def show_shell_integration_dialog(self):
