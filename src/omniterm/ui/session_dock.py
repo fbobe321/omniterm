@@ -69,3 +69,6 @@ class SessionDock(QDockWidget):
         root = QStandardItem("All Sessions")
         add_session_recursive(root, sessions)
         self.model.appendRow(root)
+
+        # Expand everything so sessions are visible without manual expanding
+        self.tree_view.expandAll()
