@@ -93,6 +93,10 @@ class MainWindow(QMainWindow):
         # SFTP Browser
         self.sftp_browser = SFTPBrowser(self)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.sftp_browser)
+        self.sftp_browser.error_occurred.connect(self.show_sftp_error)
+
+        # Show the active tab's remote files when the selected tab changes
+        self.tabs.currentChanged.connect(self.on_tab_changed)
 
         # Connect session selection to tab creation
         self.session_dock.tree_view.clicked.connect(self.on_session_selected)
@@ -189,7 +193,7 @@ class MainWindow(QMainWindow):
         session_type = session_data.get("type", "local")
         self.create_terminal_tab(session_type, session_data)
 
-    def build_terminal(self, session_type, session_data, hook_sftp=True):
+    def build_terminal(self, session_type, session_data):
         """Create a TerminalTab, start its worker, and apply appearance
         settings. Does not add it to the tab widget (the caller places it)."""
         tab = TerminalTab(session_data.get("name", "Unnamed Session"))
@@ -211,9 +215,10 @@ class MainWindow(QMainWindow):
 
         if worker:
             tab.set_worker(worker)
-            if isinstance(worker, SSHWorker) and hook_sftp:
-                worker.auth_success.connect(lambda: self.sftp_browser.connect_sftp(worker))
-                self.sftp_browser.error_occurred.connect(lambda msg: self.show_sftp_error(msg))
+            if isinstance(worker, SSHWorker):
+                # Each SSH worker gets its own SFTP session; the panel shows the
+                # active tab's connection (see on_tab_changed).
+                worker.auth_success.connect(lambda w=worker: self.sftp_browser.connect_sftp(w))
             worker.start()
 
         return tab
@@ -229,23 +234,38 @@ class MainWindow(QMainWindow):
         """Open a single tab split into `count` panes, one terminal per given
         session dict."""
         container = SplitContainer(count)
-        sftp_hooked = False
         for session_data in sessions:
             session_type = session_data.get("type", "local")
-            hook = (session_type == "ssh" and not sftp_hooked)
-            term = self.build_terminal(session_type, session_data, hook_sftp=hook)
-            if hook:
-                sftp_hooked = True
+            term = self.build_terminal(session_type, session_data)
             container.add_terminal(term)
 
         self.tabs.addTab(container, f"Split x{count}")
         self.tabs.setCurrentWidget(container)
         return container
 
+    def _primary_ssh_worker(self, widget):
+        """The SSH worker whose files should be shown for `widget` (a tab).
+        For split tabs, the first SSH pane wins; None if there is no SSH pane."""
+        if widget is None:
+            return None
+        terminals = getattr(widget, "terminals", None)
+        candidates = terminals if terminals is not None else [widget]
+        for term in candidates:
+            worker = getattr(term, "worker", None)
+            if isinstance(worker, SSHWorker):
+                return worker
+        return None
+
+    def on_tab_changed(self, index):
+        widget = self.tabs.widget(index) if index >= 0 else None
+        self.sftp_browser.show_worker(self._primary_ssh_worker(widget))
+
     def _stop_terminal(self, term):
         worker = getattr(term, "worker", None)
         if not worker:
             return
+        if isinstance(worker, SSHWorker):
+            self.sftp_browser.forget_worker(worker)
         try:
             worker.data_received.disconnect()
             worker.error_occurred.disconnect()

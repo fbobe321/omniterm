@@ -144,6 +144,12 @@ class SFTPBrowser(QDockWidget):
         self.sort_desc = False
         self.group_folders_first = get_group_folders_first()
 
+        # Per-connection SFTP state, keyed by id(ssh_worker), so each tab keeps
+        # its own session and browsing location.
+        self._states = {}
+        self.active_worker = None
+        self._active_state = None
+
     def _ensure_connected(self):
         if self.sftp is None:
             self.error_occurred.emit("Not connected to any session")
@@ -159,19 +165,56 @@ class SFTPBrowser(QDockWidget):
             return False
 
     def connect_sftp(self, ssh_worker):
+        """Called when an SSH worker authenticates. Opens an SFTP session for
+        that worker and, if its tab is the active one, displays it."""
         try:
-            if hasattr(ssh_worker, 'client'):
-                self.sftp = ssh_worker.client.open_sftp()
-                # Resolve the home directory to an absolute path so navigation is stable
-                try:
-                    self.current_path = self.sftp.normalize('.')
-                except Exception:
-                    self.current_path = '.'
-                self.list_directory(self.current_path)
-            else:
+            if not hasattr(ssh_worker, 'client'):
                 self.error_occurred.emit("SSHWorker client not found")
+                return
+            sftp = ssh_worker.client.open_sftp()
+            try:
+                path = sftp.normalize('.')
+            except Exception:
+                path = '.'
+            state = {"sftp": sftp, "path": path, "worker": ssh_worker}
+            self._states[id(ssh_worker)] = state
+            # Show it now if this worker's tab is currently selected
+            if ssh_worker is self.active_worker:
+                self._activate_state(state)
         except Exception as e:
             self.error_occurred.emit(f"SFTP Connection Error: {e}")
+
+    def show_worker(self, worker):
+        """Switch the panel to display the given SSH worker's files. Pass None
+        (or a non-SSH/unauthenticated worker) to clear the panel."""
+        self.active_worker = worker
+        state = self._states.get(id(worker)) if worker is not None else None
+        if state is None:
+            # Nothing to show for this tab yet (non-SSH or not authenticated)
+            self.sftp = None
+            self._active_state = None
+            self.current_path = "."
+            self.model.clear()
+            self.model.setHorizontalHeaderLabels(["Name", "Size", "Modified"])
+            return
+        self._activate_state(state)
+
+    def _activate_state(self, state):
+        self._active_state = state
+        self.sftp = state["sftp"]
+        self.current_path = state["path"]
+        self.list_directory(self.current_path)
+
+    def forget_worker(self, worker):
+        """Drop cached SFTP state for a worker whose tab was closed."""
+        state = self._states.pop(id(worker), None)
+        if state is not None:
+            try:
+                state["sftp"].close()
+            except Exception:
+                pass
+        if worker is self.active_worker:
+            self.show_worker(None)
 
     def refresh(self):
         """Reload the listing for the current directory."""
@@ -217,6 +260,8 @@ class SFTPBrowser(QDockWidget):
             return
 
         self.current_path = path
+        if self._active_state is not None:
+            self._active_state["path"] = path  # remember location per connection
         self.model.clear()
         self.model.setHorizontalHeaderLabels(["Name", "Size", "Modified"])
 
