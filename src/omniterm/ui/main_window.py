@@ -222,9 +222,10 @@ class MainWindow(QMainWindow):
         if worker:
             tab.set_worker(worker)
             if isinstance(worker, SSHWorker):
-                # Each SSH worker gets its own SFTP session; the panel shows the
-                # active tab's connection (see on_tab_changed).
-                worker.auth_success.connect(lambda w=worker: self.sftp_browser.connect_sftp(w))
+                # Each SSH worker opens its own SFTP session (in its thread) and
+                # hands it over; the panel shows the active tab's connection.
+                worker.sftp_ready.connect(
+                    lambda payload, w=worker: self.sftp_browser.attach_sftp(w, payload[0], payload[1]))
             worker.start()
 
         return tab

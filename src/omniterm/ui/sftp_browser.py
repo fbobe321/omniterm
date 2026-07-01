@@ -164,25 +164,13 @@ class SFTPBrowser(QDockWidget):
             self.error_occurred.emit("SFTP session lost. Please reconnect.")
             return False
 
-    def connect_sftp(self, ssh_worker):
-        """Called when an SSH worker authenticates. Opens an SFTP session for
-        that worker and, if its tab is the active one, displays it."""
-        try:
-            if not hasattr(ssh_worker, 'client'):
-                self.error_occurred.emit("SSHWorker client not found")
-                return
-            sftp = ssh_worker.client.open_sftp()
-            try:
-                path = sftp.normalize('.')
-            except Exception:
-                path = '.'
-            state = {"sftp": sftp, "path": path, "worker": ssh_worker}
-            self._states[id(ssh_worker)] = state
-            # Show it now if this worker's tab is currently selected
-            if ssh_worker is self.active_worker:
-                self._activate_state(state)
-        except Exception as e:
-            self.error_occurred.emit(f"SFTP Connection Error: {e}")
+    def attach_sftp(self, ssh_worker, sftp, home_path="."):
+        """Register a ready SFTP session (opened by the worker thread) for a
+        worker and, if its tab is the active one, display it."""
+        state = {"sftp": sftp, "path": home_path or ".", "worker": ssh_worker}
+        self._states[id(ssh_worker)] = state
+        if ssh_worker is self.active_worker:
+            self._activate_state(state)
 
     def show_worker(self, worker):
         """Switch the panel to display the given SSH worker's files. Pass None

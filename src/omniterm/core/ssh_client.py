@@ -7,6 +7,7 @@ class SSHWorker(QThread):
     data_received = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
     auth_success = pyqtSignal()
+    sftp_ready = pyqtSignal(object)  # emits (SFTPClient, home_path)
 
     def __init__(self, session_data):
         super().__init__()
@@ -39,6 +40,21 @@ class SSHWorker(QThread):
 
             # Start interactive shell
             self.channel = self.client.invoke_shell()
+
+            # Open the SFTP session here in the worker thread, AFTER the shell
+            # channel exists. Opening it from the UI thread concurrently with
+            # invoke_shell() races two channel-opens on one transport, which can
+            # time out (especially with a second session connecting). Doing both
+            # sequentially in this thread avoids that.
+            try:
+                sftp = self.client.open_sftp()
+                try:
+                    home_path = sftp.normalize('.')
+                except Exception:
+                    home_path = '.'
+                self.sftp_ready.emit((sftp, home_path))
+            except Exception:
+                pass  # SFTP is optional; the shell still works without it
 
             # Execute Startup Script if defined
             startup_script = self.session_data.get("startup_script")
