@@ -1,5 +1,5 @@
 import os
-from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QToolButton
+from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QToolButton, QInputDialog, QMenu
 from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt
 from omniterm.ui.session_dock import SessionDock
@@ -78,6 +78,12 @@ class MainWindow(QMainWindow):
         self.tabs.setTabsClosable(True)
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.setCentralWidget(self.tabs)
+
+        # Rename tabs: double-click a tab, or right-click for a menu
+        self.tabs.tabBarDoubleClicked.connect(self.rename_tab)
+        tab_bar = self.tabs.tabBar()
+        tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        tab_bar.customContextMenuRequested.connect(self.show_tab_context_menu)
 
         # "Split" button in the tab bar corner: open 1/2/4 terminals side by side
         self.split_button = QToolButton()
@@ -275,6 +281,28 @@ class MainWindow(QMainWindow):
             pass
         worker.stop()
         worker.wait()
+
+    def rename_tab(self, index):
+        if index < 0:
+            return
+        current = self.tabs.tabText(index)
+        new_name, ok = QInputDialog.getText(self, "Rename Tab", "Tab name:", text=current)
+        if ok and new_name.strip():
+            self.tabs.setTabText(index, new_name.strip())
+
+    def show_tab_context_menu(self, position):
+        tab_bar = self.tabs.tabBar()
+        index = tab_bar.tabAt(position)
+        if index < 0:
+            return
+        menu = QMenu()
+        rename_action = menu.addAction("Rename...")
+        close_action = menu.addAction("Close")
+        chosen = menu.exec(tab_bar.mapToGlobal(position))
+        if chosen == rename_action:
+            self.rename_tab(index)
+        elif chosen == close_action:
+            self.close_tab(index)
 
     def close_tab(self, index):
         widget = self.tabs.widget(index)
