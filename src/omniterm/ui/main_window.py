@@ -1,5 +1,5 @@
 import os
-from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QToolButton, QInputDialog, QMenu
+from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QToolButton, QInputDialog, QMenu, QCheckBox
 from PyQt6.QtGui import QColor
 from PyQt6.QtCore import Qt
 from omniterm.ui.session_dock import SessionDock
@@ -89,7 +89,7 @@ class MainWindow(QMainWindow):
         self.split_button = QToolButton()
         self.split_button.setText("▦ Split")
         self.split_button.setToolTip("Open multiple sessions in a split view (1 / 2 / 4 panes)")
-        self.split_button.clicked.connect(self.show_split_view_dialog)
+        self.split_button.clicked.connect(lambda: self.show_split_view_dialog())
         self.tabs.setCornerWidget(self.split_button, Qt.Corner.TopRightCorner)
 
         # Session Dock
@@ -134,7 +134,7 @@ class MainWindow(QMainWindow):
         self.shell_integration_action = self.settings_menu.addAction("Shell Integration Guide...")
         self.shell_integration_action.triggered.connect(self.show_shell_integration_dialog)
 
-    def show_split_view_dialog(self):
+    def show_split_view_dialog(self, default_count=2):
         from omniterm.core.config import load_sessions
 
         flat = []
@@ -152,7 +152,7 @@ class MainWindow(QMainWindow):
 
         count_combo = QComboBox()
         count_combo.addItems(["1", "2", "4"])
-        count_combo.setCurrentText("2")
+        count_combo.setCurrentText(str(default_count) if str(default_count) in ("1", "2", "4") else "2")
         layout.addRow("Panes:", count_combo)
 
         pickers = []
@@ -298,10 +298,20 @@ class MainWindow(QMainWindow):
             return
         menu = QMenu()
         rename_action = menu.addAction("Rename...")
+        split_menu = menu.addMenu("Split View")
+        split1 = split_menu.addAction("1 Pane")
+        split2 = split_menu.addAction("2 Panes")
+        split4 = split_menu.addAction("4 Panes")
         close_action = menu.addAction("Close")
         chosen = menu.exec(tab_bar.mapToGlobal(position))
         if chosen == rename_action:
             self.rename_tab(index)
+        elif chosen == split1:
+            self.show_split_view_dialog(1)
+        elif chosen == split2:
+            self.show_split_view_dialog(2)
+        elif chosen == split4:
+            self.show_split_view_dialog(4)
         elif chosen == close_action:
             self.close_tab(index)
 
@@ -553,14 +563,21 @@ class MainWindow(QMainWindow):
                                "Master password has been set for the current session.")
         dialog.accept()
 
-    def show_add_session_dialog(self):
+    def show_edit_session_dialog(self, session_data):
+        self.show_add_session_dialog(existing=session_data)
+
+    def show_add_session_dialog(self, existing=None):
+        editing = isinstance(existing, dict)
+        existing = existing if editing else {}
+
         dialog = QDialog(self)
-        dialog.setWindowTitle("Add Session")
+        dialog.setWindowTitle("Edit Session" if editing else "Add Session")
         layout = QFormLayout(dialog)
 
-        name_edit = QLineEdit()
+        name_edit = QLineEdit(existing.get("name", ""))
         type_combo = QComboBox()
         type_combo.addItems(["ssh", "serial", "local"])
+        type_combo.setCurrentText(existing.get("type", "ssh"))
 
         layout.addRow("Name:", name_edit)
         layout.addRow("Type:", type_combo)
@@ -568,23 +585,30 @@ class MainWindow(QMainWindow):
         # SSH Fields
         ssh_container = QWidget()
         ssh_layout = QFormLayout(ssh_container)
-        host_edit = QLineEdit()
-        user_edit = QLineEdit()
-        port_edit = QLineEdit("22")
+        host_edit = QLineEdit(existing.get("host", ""))
+        user_edit = QLineEdit(existing.get("user", ""))
+        port_edit = QLineEdit(str(existing.get("port", 22)))
         auth_combo = QComboBox()
         auth_combo.addItems(["password", "key"])
+        auth_combo.setCurrentText(existing.get("auth_method", "password"))
         pass_edit = QLineEdit()
         pass_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        key_edit = QLineEdit()
-        
+        if editing and existing.get("password"):
+            pass_edit.setPlaceholderText("(unchanged - leave blank to keep)")
+        key_edit = QLineEdit(existing.get("key_path", ""))
+
         # Tunneling Fields
-        tunnel_edit = QLineEdit()
+        tunnel_edit = QLineEdit(self.tunnels_to_str(existing.get("tunnels", [])))
         tunnel_edit.setPlaceholderText("local_port:remote_host:remote_port (comma separated)")
-        
+
         # Startup Script Field
-        startup_edit = QLineEdit()
+        startup_edit = QLineEdit(existing.get("startup_script", ""))
         startup_edit.setPlaceholderText("Command to run on startup")
-        
+
+        # X11 Forwarding
+        x11_check = QCheckBox("Enable X11 forwarding (run remote GUI apps locally)")
+        x11_check.setChecked(bool(existing.get("x11", False)))
+
         ssh_layout.addRow("Host:", host_edit)
         ssh_layout.addRow("User:", user_edit)
         ssh_layout.addRow("Port:", port_edit)
@@ -593,21 +617,23 @@ class MainWindow(QMainWindow):
         ssh_layout.addRow("Key Path:", key_edit)
         ssh_layout.addRow("Tunnels:", tunnel_edit)
         ssh_layout.addRow("Startup Script:", startup_edit)
+        ssh_layout.addRow("X11:", x11_check)
         layout.addRow(ssh_container)
 
         # Serial Fields
         serial_container = QWidget()
         serial_layout = QFormLayout(serial_container)
-        com_edit = QLineEdit()
-        baud_edit = QLineEdit("115200")
+        com_edit = QLineEdit(existing.get("com_port", ""))
+        baud_edit = QLineEdit(str(existing.get("baud_rate", 115200)))
         data_bits_combo = QComboBox()
         data_bits_combo.addItems(["5", "6", "7", "8"])
-        data_bits_combo.setCurrentText("8")
+        data_bits_combo.setCurrentText(str(existing.get("data_bits", 8)))
         parity_combo = QComboBox()
         parity_combo.addItems(["N", "E", "O", "M"])
+        parity_combo.setCurrentText(existing.get("parity", "N"))
         stop_bits_combo = QComboBox()
         stop_bits_combo.addItems(["1", "1.5", "2"])
-        stop_bits_combo.setCurrentText("1")
+        stop_bits_combo.setCurrentText(str(existing.get("stop_bits", 1)).rstrip("0").rstrip(".") or "1")
 
         serial_layout.addRow("COM Port:", com_edit)
         serial_layout.addRow("Baud Rate:", baud_edit)
@@ -631,6 +657,7 @@ class MainWindow(QMainWindow):
 
         btn = QPushButton("Save")
         btn.clicked.connect(lambda: self.save_new_session(
+            existing.get("id") if editing else None,
             name_edit.text(),
             type_combo.currentText(),
             host_edit.text(),
@@ -641,6 +668,7 @@ class MainWindow(QMainWindow):
             key_edit.text(),
             tunnel_edit.text(),
             startup_edit.text(),
+            x11_check.isChecked(),
             com_edit.text(),
             baud_edit.text(),
             data_bits_combo.currentText(),
@@ -651,45 +679,63 @@ class MainWindow(QMainWindow):
         layout.addRow(btn)
         dialog.exec()
 
-    def save_new_session(self, name, stype, host, user, port, auth_method, password, key_path, tunnel, startup, com, baud, data_bits, parity, stop_bits, dialog):
-        from omniterm.core.config import load_sessions, save_sessions, encrypt_password
+    @staticmethod
+    def tunnels_to_str(tunnels):
+        return ",".join(
+            f"{t.get('local_port')}:{t.get('remote_host')}:{t.get('remote_port')}"
+            for t in (tunnels or [])
+        )
+
+    def save_new_session(self, session_id, name, stype, host, user, port, auth_method, password, key_path, tunnel, startup, x11, com, baud, data_bits, parity, stop_bits, dialog):
+        from omniterm.core.config import load_sessions, save_sessions, encrypt_password, update_session, find_session
         import uuid
 
-        data = load_sessions()
-        new_session = {
-            "id": str(uuid.uuid4()),
+        prior = find_session(session_id) if session_id else None
+
+        session = {
+            "id": session_id or str(uuid.uuid4()),
             "name": name,
             "type": stype,
         }
 
         if stype == "ssh":
-            new_session.update({
+            session.update({
                 "host": host,
                 "user": user,
                 "port": int(port) if port.isdigit() else 22,
                 "auth_method": auth_method
             })
-            if auth_method == "password" and password:
-                new_session["password"] = encrypt_password(password)
+            if auth_method == "password":
+                if password:
+                    session["password"] = encrypt_password(password)
+                elif prior and prior.get("password"):
+                    session["password"] = prior["password"]  # keep existing
             elif auth_method == "key":
-                new_session["key_path"] = key_path
+                session["key_path"] = key_path
 
             tunnels = self.parse_tunnels(tunnel)
             if tunnels:
-                new_session["tunnels"] = tunnels
+                session["tunnels"] = tunnels
             if startup.strip():
-                new_session["startup_script"] = startup.strip()
+                session["startup_script"] = startup.strip()
+            if x11:
+                session["x11"] = True
         elif stype == "serial":
-            new_session.update({
-                "com_port": com, 
+            session.update({
+                "com_port": com,
                 "baud_rate": int(baud) if baud.isdigit() else 115200,
                 "data_bits": int(data_bits),
                 "parity": parity,
                 "stop_bits": float(stop_bits)
             })
 
-        data["sessions"].append(new_session)
-        save_sessions(data)
+        if session_id and update_session(session):
+            pass  # updated in place
+        else:
+            data = load_sessions()
+            data.setdefault("sessions", []).append(session)
+            save_sessions(data)
+
         self.session_dock.load_sessions_into_tree()
         dialog.accept()
 

@@ -266,6 +266,45 @@ def import_sessions(path):
     save_sessions(data)
     return count[0]
 
+def update_session(updated):
+    """Replace the session (matched by id) in-place, searching nested folders.
+    Returns True if a matching session was found and saved."""
+    sid = updated.get("id")
+    if not sid:
+        return False
+    data = load_sessions()
+    found = [False]
+
+    def walk(session_list):
+        for i, s in enumerate(session_list):
+            if s.get("id") == sid:
+                # keep folder children if the caller didn't provide new ones
+                if s.get("type") == "folder" and "children" not in updated:
+                    updated["children"] = s.get("children", [])
+                session_list[i] = updated
+                found[0] = True
+                return
+            if s.get("type") == "folder":
+                walk(s.get("children", []))
+
+    walk(data.get("sessions", []))
+    if found[0]:
+        save_sessions(data)
+    return found[0]
+
+def find_session(session_id):
+    """Return the session dict with the given id, or None."""
+    def walk(session_list):
+        for s in session_list:
+            if s.get("id") == session_id:
+                return s
+            if s.get("type") == "folder":
+                r = walk(s.get("children", []))
+                if r:
+                    return r
+        return None
+    return walk(load_sessions().get("sessions", []))
+
 def export_sessions(path, include_secrets=False):
     """Write the session config to `path`. By default encrypted password
     tokens are stripped so the exported file is safe to share/back up."""

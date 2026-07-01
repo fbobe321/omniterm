@@ -28,10 +28,19 @@ class SessionDock(QDockWidget):
             return  # not a real session/folder node (e.g. the "All Sessions" root)
 
         menu = QMenu()
+        if session_data.get("type") != "folder":
+            edit_action = QAction("Edit Session", self)
+            edit_action.triggered.connect(lambda: self._edit_session(session_data))
+            menu.addAction(edit_action)
         delete_action = QAction("Delete Session", self)
         delete_action.triggered.connect(lambda: self.delete_session(session_data))
         menu.addAction(delete_action)
         menu.exec(self.tree_view.viewport().mapToGlobal(position))
+
+    def _edit_session(self, session_data):
+        window = self.window()
+        if hasattr(window, "show_edit_session_dialog"):
+            window.show_edit_session_dialog(session_data)
 
     def delete_session(self, session_data):
         name = session_data.get("name", "this session")

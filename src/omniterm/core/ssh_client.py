@@ -1,6 +1,10 @@
 from PyQt6.QtCore import QThread, pyqtSignal
 import paramiko
 import time
+import os
+import socket
+import select
+import threading
 from omniterm.core.config import decrypt_password
 
 class SSHWorker(QThread):
@@ -41,6 +45,10 @@ class SSHWorker(QThread):
             # Start interactive shell
             self.channel = self.client.invoke_shell()
 
+            # X11 forwarding: run remote GUI apps on the local X server
+            if self.session_data.get("x11"):
+                self._setup_x11()
+
             # Open the SFTP session here in the worker thread, AFTER the shell
             # channel exists. Opening it from the UI thread concurrently with
             # invoke_shell() races two channel-opens on one transport, which can
@@ -74,6 +82,72 @@ class SSHWorker(QThread):
 
         except Exception as e:
             self.error_occurred.emit(str(e))
+
+    # --- X11 forwarding ---------------------------------------------------
+    def _setup_x11(self):
+        """Request X11 forwarding on the shell channel and forward remote X11
+        channels to the local X server (via DISPLAY)."""
+        display = os.environ.get("DISPLAY")
+        if not display:
+            self.error_occurred.emit(
+                "X11 forwarding: no local DISPLAY found. Start an X server "
+                "(e.g. VcXsrv/X410 on Windows, XQuartz on macOS) and set DISPLAY."
+            )
+            return
+        try:
+            self.channel.request_x11(handler=self._on_x11_channel)
+        except Exception as e:
+            self.error_occurred.emit(f"X11 forwarding setup failed: {e}")
+
+    def _on_x11_channel(self, chan, src_addr):
+        # Called from paramiko's transport thread when the remote opens an X11
+        # channel. Connect it to the local X server and pump bytes both ways.
+        try:
+            sock = self._connect_local_x11()
+        except Exception as e:
+            self.error_occurred.emit(f"X11 connect to local display failed: {e}")
+            try:
+                chan.close()
+            except Exception:
+                pass
+            return
+        threading.Thread(target=self._pump_x11, args=(chan, sock), daemon=True).start()
+
+    def _connect_local_x11(self):
+        display = os.environ.get("DISPLAY", "")
+        host, _, disp = display.rpartition(":")
+        disp_num = int((disp.split(".")[0] or "0"))
+        if host and host not in ("unix", ""):
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((host, 6000 + disp_num))
+        else:
+            # Local unix-domain X socket (Linux/macOS)
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.connect(f"/tmp/.X11-unix/X{disp_num}")
+        return sock
+
+    def _pump_x11(self, chan, sock):
+        try:
+            while self._running:
+                readable, _, _ = select.select([chan, sock], [], [], 1.0)
+                if chan in readable:
+                    data = chan.recv(4096)
+                    if not data:
+                        break
+                    sock.sendall(data)
+                if sock in readable:
+                    data = sock.recv(4096)
+                    if not data:
+                        break
+                    chan.sendall(data)
+        except Exception:
+            pass
+        finally:
+            for closer in (chan, sock):
+                try:
+                    closer.close()
+                except Exception:
+                    pass
 
     def setup_tunnels(self):
         tunnels = self.session_data.get("tunnels", [])
