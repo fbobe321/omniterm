@@ -170,6 +170,32 @@ def save_sessions(data):
     with open(target_file, "w") as f:
         json.dump(data, f, indent=2)
 
+def get_group_folders_first():
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+                value = config.get("sftp", {}).get("group_folders_first")
+                if isinstance(value, bool):
+                    return value
+        except (json.JSONDecodeError, IOError):
+            pass
+    return True  # default: folders grouped before files
+
+def set_group_folders_first(value):
+    config = {}
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    sftp_cfg = config.get("sftp", {}) if isinstance(config.get("sftp"), dict) else {}
+    sftp_cfg["group_folders_first"] = bool(value)
+    config["sftp"] = sftp_cfg
+    with open(GLOBAL_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
 def delete_session(session_id):
     """Remove the session with the given id, searching nested folders too.
     Returns True if a session was removed."""

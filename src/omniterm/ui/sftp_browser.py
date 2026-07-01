@@ -6,6 +6,7 @@ import stat
 import posixpath
 import tempfile
 import time
+from omniterm.core.config import get_group_folders_first, set_group_folders_first
 
 # Custom item data roles
 PATH_ROLE = 32      # full remote path for the entry
@@ -141,6 +142,7 @@ class SFTPBrowser(QDockWidget):
         self.current_path = "."
         self.sort_column = 0   # 0=name, 1=size, 2=modified
         self.sort_desc = False
+        self.group_folders_first = get_group_folders_first()
 
     def _ensure_connected(self):
         if self.sftp is None:
@@ -237,8 +239,10 @@ class SFTPBrowser(QDockWidget):
             entries.sort(key=lambda a: a.st_mtime or 0, reverse=self.sort_desc)
         else:
             entries.sort(key=lambda a: a.filename.lower(), reverse=self.sort_desc)
-        # ...then keep directories grouped before files (stable, preserves order above)
-        entries.sort(key=lambda a: 0 if is_dir_of(a) else 1)
+        # ...then optionally keep directories grouped before files
+        # (stable sort preserves the ordering above within each group)
+        if self.group_folders_first:
+            entries.sort(key=lambda a: 0 if is_dir_of(a) else 1)
 
         for attr in entries:
             name = attr.filename
@@ -322,7 +326,19 @@ class SFTPBrowser(QDockWidget):
         refresh_action.triggered.connect(self.refresh)
         menu.addAction(refresh_action)
 
+        menu.addSeparator()
+        group_action = QAction("Group Folders First", self)
+        group_action.setCheckable(True)
+        group_action.setChecked(self.group_folders_first)
+        group_action.toggled.connect(self.set_group_folders_first)
+        menu.addAction(group_action)
+
         menu.exec(self.tree_view.mapToGlobal(position))
+
+    def set_group_folders_first(self, enabled):
+        self.group_folders_first = bool(enabled)
+        set_group_folders_first(self.group_folders_first)
+        self.list_directory(self.current_path)
 
     def download_files(self, remote_paths):
         """Download several files at once into a chosen local directory."""
