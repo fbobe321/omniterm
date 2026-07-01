@@ -218,6 +218,54 @@ def delete_session(session_id):
         save_sessions(data)
     return removed[0]
 
+def import_sessions(path):
+    """Merge sessions from a JSON file into the current config. Accepts either
+    a full export ({"sessions": [...]}) or a bare list. Imported ids that are
+    missing or collide with existing ones are reassigned. Returns the number
+    of sessions (non-folder entries) imported."""
+    import uuid
+    with open(path, "r") as f:
+        imported = json.load(f)
+
+    if isinstance(imported, list):
+        imported_sessions = imported
+    elif isinstance(imported, dict):
+        imported_sessions = imported.get("sessions", [])
+    else:
+        raise ValueError("Unrecognized sessions file format")
+
+    data = load_sessions()
+
+    existing_ids = set()
+    def collect(session_list):
+        for s in session_list:
+            if isinstance(s, dict):
+                if s.get("id"):
+                    existing_ids.add(s["id"])
+                if s.get("type") == "folder":
+                    collect(s.get("children", []))
+    collect(data.get("sessions", []))
+
+    count = [0]
+    def normalize(session_list):
+        for s in session_list:
+            if not isinstance(s, dict):
+                continue
+            sid = s.get("id")
+            if not sid or sid in existing_ids:
+                sid = str(uuid.uuid4())
+                s["id"] = sid
+            existing_ids.add(sid)
+            if s.get("type") == "folder":
+                normalize(s.get("children", []))
+            else:
+                count[0] += 1
+    normalize(imported_sessions)
+
+    data.setdefault("sessions", []).extend(imported_sessions)
+    save_sessions(data)
+    return count[0]
+
 def export_sessions(path, include_secrets=False):
     """Write the session config to `path`. By default encrypted password
     tokens are stripped so the exported file is safe to share/back up."""
