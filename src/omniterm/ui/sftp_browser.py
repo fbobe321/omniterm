@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView, QWidget, QVBoxLayout, QCheckBox
+from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView, QWidget, QVBoxLayout, QCheckBox, QLineEdit
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QAction, QDrag
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl, QSize
 import os
@@ -190,6 +190,12 @@ class SFTPBrowser(QDockWidget):
         header.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
         header.sectionClicked.connect(self.on_header_clicked)
 
+        # Editable current-path bar (type/paste a path + Enter to navigate)
+        self.path_edit = QLineEdit()
+        self.path_edit.setPlaceholderText("Path — type or paste, then Enter")
+        self.path_edit.setClearButtonEnabled(True)
+        self.path_edit.returnPressed.connect(self._on_path_entered)
+
         # "Follow terminal folder" checkbox above the tree
         self.follow_check = QCheckBox("Follow terminal folder")
         self.follow_check.setToolTip(
@@ -202,6 +208,7 @@ class SFTPBrowser(QDockWidget):
         vbox = QVBoxLayout(container)
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(2)
+        vbox.addWidget(self.path_edit)
         vbox.addWidget(self.follow_check)
         vbox.addWidget(self.tree_view)
         self.setWidget(container)
@@ -261,6 +268,7 @@ class SFTPBrowser(QDockWidget):
             self.sftp = None
             self._active_state = None
             self.current_path = "."
+            self.path_edit.clear()
             self.model.clear()
             self.model.setHorizontalHeaderLabels(["Name", "Size", "Modified"])
             return
@@ -325,6 +333,18 @@ class SFTPBrowser(QDockWidget):
         """Reload the listing for the current directory."""
         self.list_directory(self.current_path)
 
+    def _on_path_entered(self):
+        if self.sftp is None:
+            return
+        target = self.path_edit.text().strip()
+        if not target:
+            return
+        try:
+            target = self.sftp.normalize(target)
+        except Exception:
+            pass
+        self.list_directory(target)
+
     def on_header_clicked(self, column):
         if column == self.sort_column:
             self.sort_desc = not self.sort_desc
@@ -367,6 +387,7 @@ class SFTPBrowser(QDockWidget):
         self.current_path = path
         if self._active_state is not None:
             self._active_state["path"] = path  # remember location per connection
+        self.path_edit.setText(path)
         self.model.clear()
         self.model.setHorizontalHeaderLabels(["Name", "Size", "Modified"])
 
