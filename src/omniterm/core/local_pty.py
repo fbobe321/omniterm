@@ -10,7 +10,7 @@ class LocalPTYWorker(QThread):
     error_occurred = pyqtSignal(str)
     disconnected = pyqtSignal(str)
 
-    def __init__(self, prefer_unix=False):
+    def __init__(self, prefer_unix=False, inshellisense=False):
         super().__init__()
         self._running = True
         self.process = None
@@ -20,6 +20,20 @@ class LocalPTYWorker(QThread):
         self.rows = 24
         # "Home" terminal: prefer a Unix-like shell (Git Bash/WSL/BusyBox on Windows)
         self.prefer_unix = prefer_unix
+        # Inshellisense (Microsoft 'is'): IDE-style command autocomplete
+        self.inshellisense = inshellisense
+
+    def _maybe_start_inshellisense(self):
+        """If enabled and 'is' is installed, start it in the shell for
+        autocomplete; otherwise show a one-time hint."""
+        if not self.inshellisense:
+            return
+        if shutil.which("is"):
+            self.send_data("is\r")
+        else:
+            self.data_received.emit(
+                "\x1b[33m[OmniTerm] Inshellisense enabled but 'is' was not found. "
+                "Install it: npm install -g @microsoft/inshellisense\x1b[0m\r\n")
 
     def _tools_dir(self):
         """OmniTerm's own bin dir, added to the Home terminal PATH so users can
@@ -114,6 +128,7 @@ class LocalPTYWorker(QThread):
                             "BusyBox). Falling back to cmd. Install Git for Windows or WSL for "
                             "ls/grep/awk/scp/rsync.\x1b[0m\r\n")
                     self._emit_rsync_status()
+                self._maybe_start_inshellisense()
                 while self._running:
                     try:
                         data = self.pty.read(1024)
@@ -152,6 +167,7 @@ class LocalPTYWorker(QThread):
                 os.close(slave)
                 if self.prefer_unix:
                     self._emit_rsync_status()
+                self._maybe_start_inshellisense()
 
                 while self._running:
                     r, w, e = select.select([self.master_fd], [], [], 0.1)

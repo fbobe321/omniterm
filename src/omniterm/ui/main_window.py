@@ -10,7 +10,7 @@ from omniterm.ui.sftp_browser import SFTPBrowser
 from omniterm.core.ssh_client import SSHWorker
 from omniterm.core.serial_client import SerialWorker
 from omniterm.core.local_pty import LocalPTYWorker
-from omniterm.core.config import HOME_DIR, set_home_dir, init_cipher, set_shared_sessions_file, get_terminal_settings, set_terminal_settings, export_sessions, import_sessions
+from omniterm.core.config import HOME_DIR, set_home_dir, init_cipher, set_shared_sessions_file, get_terminal_settings, set_terminal_settings, export_sessions, import_sessions, get_use_inshellisense, set_use_inshellisense
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -78,6 +78,10 @@ class MainWindow(QMainWindow):
         self.settings_menu = QMenu(self)
         self.terminal_appearance_action = self.settings_menu.addAction("Terminal Appearance...")
         self.terminal_appearance_action.triggered.connect(self.show_terminal_appearance_dialog)
+        self.inshellisense_action = self.settings_menu.addAction("Command Autocomplete (Inshellisense)")
+        self.inshellisense_action.setCheckable(True)
+        self.inshellisense_action.setChecked(get_use_inshellisense())
+        self.inshellisense_action.toggled.connect(self._toggle_inshellisense)
         self.open_tools_action = self.settings_menu.addAction("Open Home Tools Folder (rsync, etc.)...")
         self.open_tools_action.triggered.connect(self.open_tools_folder)
         self.set_home_dir_action = self.settings_menu.addAction("Set Persistent Home Directory...")
@@ -255,8 +259,9 @@ class MainWindow(QMainWindow):
         self.create_terminal_tab(session_type, session_data)
 
     def _make_worker(self, session_type, session_data):
+        ish = get_use_inshellisense()
         if session_type == "ssh":
-            return SSHWorker(session_data)
+            return SSHWorker(session_data, inshellisense=ish)
         elif session_type == "serial":
             return SerialWorker(
                 session_data.get("com_port"),
@@ -266,10 +271,10 @@ class MainWindow(QMainWindow):
                 session_data.get("stop_bits", 1)
             )
         elif session_type == "local":
-            return LocalPTYWorker()
+            return LocalPTYWorker(inshellisense=ish)
         elif session_type == "home":
             # MobaXterm-style local Unix shell (Git Bash/WSL/BusyBox on Windows)
-            return LocalPTYWorker(prefer_unix=True)
+            return LocalPTYWorker(prefer_unix=True, inshellisense=ish)
         return None
 
     def _start_worker_for(self, tab, worker):
@@ -348,6 +353,17 @@ class MainWindow(QMainWindow):
 
     def open_home_terminal(self):
         self.create_terminal_tab("home", {"name": "Home", "type": "home"})
+
+    def _toggle_inshellisense(self, enabled):
+        set_use_inshellisense(enabled)
+        if enabled:
+            QMessageBox.information(
+                self, "Inshellisense",
+                "Command autocomplete (Inshellisense) will start in new terminals.\n\n"
+                "Requires the 'is' tool to be installed:\n"
+                "  npm install -g @microsoft/inshellisense\n\n"
+                "For SSH sessions it must be installed on the remote host. "
+                "Existing tabs are unaffected — open a new terminal to use it.")
 
     def open_tools_folder(self):
         """Open <home>/bin, which is on the Home terminal's PATH. Drop rsync.exe

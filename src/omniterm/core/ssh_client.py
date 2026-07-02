@@ -21,13 +21,14 @@ class SSHWorker(QThread):
     cwd_changed = pyqtSignal(str)    # remote working directory (via OSC 7)
     disconnected = pyqtSignal(str)   # connection ended (not a user-requested stop)
 
-    def __init__(self, session_data):
+    def __init__(self, session_data, inshellisense=False):
         super().__init__()
         self.session_data = session_data
         self._running = True
         self.tunnels = []
         self.term_cols = 80
         self.term_rows = 24
+        self.inshellisense = inshellisense
 
     def run(self):
         try:
@@ -82,6 +83,11 @@ class SSHWorker(QThread):
                 self.channel.send(startup_script + "\n")
                 # Give it a moment to execute
                 time.sleep(0.5)
+
+            # Inshellisense (command autocomplete) on the remote, if enabled.
+            # Requires 'is' to be installed on the remote host.
+            if self.inshellisense:
+                self.channel.send("command -v is >/dev/null 2>&1 && is\n")
 
             self._osc_buffer = ""
             self._last_cwd = None

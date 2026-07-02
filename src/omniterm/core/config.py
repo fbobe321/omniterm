@@ -170,6 +170,29 @@ def save_sessions(data):
     with open(target_file, "w") as f:
         json.dump(data, f, indent=2)
 
+def get_use_inshellisense():
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                value = json.load(f).get("inshellisense")
+                if isinstance(value, bool):
+                    return value
+        except (json.JSONDecodeError, IOError):
+            pass
+    return False
+
+def set_use_inshellisense(value):
+    config = {}
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    config["inshellisense"] = bool(value)
+    with open(GLOBAL_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
 def get_group_folders_first():
     if GLOBAL_CONFIG_FILE.exists():
         try:
