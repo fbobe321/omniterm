@@ -6,6 +6,7 @@ import time
 class LocalPTYWorker(QThread):
     data_received = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
+    disconnected = pyqtSignal(str)
 
     def __init__(self):
         super().__init__()
@@ -26,6 +27,8 @@ class LocalPTYWorker(QThread):
                         data = self.pty.read(1024)
                         if data:
                             self.data_received.emit(data)
+                        elif not self.pty.isalive():
+                            break
                     except EOFError:
                         break
                     except Exception:
@@ -52,13 +55,21 @@ class LocalPTYWorker(QThread):
                 while self._running:
                     r, w, e = select.select([self.master_fd], [], [], 0.1)
                     if r:
-                        data = os.read(self.master_fd, 1024).decode('utf-8', errors='replace')
-                        self.data_received.emit(data)
+                        raw = os.read(self.master_fd, 1024)
+                        if not raw:  # EOF: the shell exited
+                            break
+                        self.data_received.emit(raw.decode('utf-8', errors='replace'))
                     time.sleep(0.01)
 
-                os.close(self.master_fd)
+                try:
+                    os.close(self.master_fd)
+                except Exception:
+                    pass
         except Exception as e:
             self.error_occurred.emit(str(e))
+        finally:
+            if self._running:
+                self.disconnected.emit("Session ended.")
 
     def stop(self):
         self._running = False

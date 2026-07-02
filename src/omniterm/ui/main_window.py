@@ -234,10 +234,16 @@ class MainWindow(QMainWindow):
                     worker.error_occurred.disconnect(old_tab.handle_error)
                 except (TypeError, RuntimeError):
                     pass
+                try:
+                    worker.disconnected.disconnect(old_tab.on_disconnected)
+                except (TypeError, RuntimeError, AttributeError):
+                    pass
 
             # Fresh terminal, created directly inside the split hierarchy
             new_tab = TerminalTab(old_tab.session_name)
             new_tab.apply_settings(get_terminal_settings())
+            self._wire_terminal(new_tab, getattr(old_tab, "session_type", None),
+                                getattr(old_tab, "session_data", None))
             if worker is not None:
                 new_tab.set_worker(worker)  # reconnects the live worker to the new view
             container.add_terminal(new_tab)
@@ -266,17 +272,11 @@ class MainWindow(QMainWindow):
         session_type = session_data.get("type", "local")
         self.create_terminal_tab(session_type, session_data)
 
-    def build_terminal(self, session_type, session_data):
-        """Create a TerminalTab, start its worker, and apply appearance
-        settings. Does not add it to the tab widget (the caller places it)."""
-        tab = TerminalTab(session_data.get("name", "Unnamed Session"))
-        tab.apply_settings(get_terminal_settings())
-
-        worker = None
+    def _make_worker(self, session_type, session_data):
         if session_type == "ssh":
-            worker = SSHWorker(session_data)
+            return SSHWorker(session_data)
         elif session_type == "serial":
-            worker = SerialWorker(
+            return SerialWorker(
                 session_data.get("com_port"),
                 session_data.get("baud_rate", 115200),
                 session_data.get("data_bits", 8),
@@ -284,20 +284,72 @@ class MainWindow(QMainWindow):
                 session_data.get("stop_bits", 1)
             )
         elif session_type == "local":
-            worker = LocalPTYWorker()
+            return LocalPTYWorker()
+        return None
 
+    def _start_worker_for(self, tab, worker):
+        tab.set_worker(worker)
+        if isinstance(worker, SSHWorker):
+            # Each SSH worker opens its own SFTP session (in its thread) and
+            # hands it over; the panel shows the active tab's connection.
+            worker.sftp_ready.connect(
+                lambda payload, w=worker: self.sftp_browser.attach_sftp(w, payload[0], payload[1]))
+            worker.cwd_changed.connect(
+                lambda path, w=worker: self.sftp_browser.on_terminal_cwd(w, path))
+        worker.start()
+
+    def _wire_terminal(self, tab, session_type, session_data):
+        """Record how to rebuild this terminal and hook its reconnect/close actions."""
+        tab.session_type = session_type
+        tab.session_data = session_data
+        tab.reconnect_requested.connect(lambda t=tab: self.on_terminal_reconnect_requested(t))
+        tab.close_requested.connect(lambda t=tab: self.on_terminal_close_requested(t))
+
+    def build_terminal(self, session_type, session_data):
+        """Create a TerminalTab, start its worker, and apply appearance
+        settings. Does not add it to the tab widget (the caller places it)."""
+        tab = TerminalTab(session_data.get("name", "Unnamed Session"))
+        tab.apply_settings(get_terminal_settings())
+        self._wire_terminal(tab, session_type, session_data)
+
+        worker = self._make_worker(session_type, session_data)
         if worker:
-            tab.set_worker(worker)
-            if isinstance(worker, SSHWorker):
-                # Each SSH worker opens its own SFTP session (in its thread) and
-                # hands it over; the panel shows the active tab's connection.
-                worker.sftp_ready.connect(
-                    lambda payload, w=worker: self.sftp_browser.attach_sftp(w, payload[0], payload[1]))
-                worker.cwd_changed.connect(
-                    lambda path, w=worker: self.sftp_browser.on_terminal_cwd(w, path))
-            worker.start()
+            self._start_worker_for(tab, worker)
 
         return tab
+
+    def on_terminal_reconnect_requested(self, tab):
+        session_type = getattr(tab, "session_type", None)
+        session_data = getattr(tab, "session_data", None)
+        if not session_type or session_data is None:
+            return
+        old = getattr(tab, "worker", None)
+        if old is not None:
+            try:
+                old.stop()
+            except Exception:
+                pass
+        worker = self._make_worker(session_type, session_data)
+        if worker:
+            tab.hide_disconnect_bar()
+            self._start_worker_for(tab, worker)
+
+    def _top_level_tab_of(self, term):
+        if self.tabs.indexOf(term) != -1:
+            return term
+        for i in range(self.tabs.count()):
+            widget = self.tabs.widget(i)
+            terminals = getattr(widget, "terminals", None)
+            if terminals and term in terminals:
+                return widget
+        return None
+
+    def on_terminal_close_requested(self, term):
+        top = self._top_level_tab_of(term)
+        if top is not None:
+            idx = self.tabs.indexOf(top)
+            if idx != -1:
+                self.close_tab(idx)
 
     def create_terminal_tab(self, session_type, session_data):
         session_name = session_data.get("name", "Unnamed Session")
@@ -395,9 +447,15 @@ class MainWindow(QMainWindow):
                     worker.error_occurred.disconnect(old_term.handle_error)
                 except (TypeError, RuntimeError):
                     pass
+                try:
+                    worker.disconnected.disconnect(old_term.on_disconnected)
+                except (TypeError, RuntimeError, AttributeError):
+                    pass
 
             new_tab = TerminalTab(old_term.session_name)
             new_tab.apply_settings(get_terminal_settings())
+            self._wire_terminal(new_tab, getattr(old_term, "session_type", None),
+                                getattr(old_term, "session_data", None))
             if worker is not None:
                 new_tab.set_worker(worker)
             old_term.worker = None  # keep the transplanted worker alive

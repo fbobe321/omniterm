@@ -19,6 +19,7 @@ class SSHWorker(QThread):
     auth_success = pyqtSignal()
     sftp_ready = pyqtSignal(object)  # emits (SFTPClient, home_path)
     cwd_changed = pyqtSignal(str)    # remote working directory (via OSC 7)
+    disconnected = pyqtSignal(str)   # connection ended (not a user-requested stop)
 
     def __init__(self, session_data):
         super().__init__()
@@ -86,16 +87,28 @@ class SSHWorker(QThread):
             self._last_cwd = None
             while self._running:
                 if self.channel.recv_ready():
-                    data = self.channel.recv(1024).decode('utf-8', errors='replace')
+                    raw = self.channel.recv(1024)
+                    if not raw:  # EOF: remote closed the connection
+                        break
+                    data = raw.decode('utf-8', errors='replace')
                     self.data_received.emit(data)
                     self._scan_cwd(data)
+                elif self.channel.closed or self.channel.exit_status_ready():
+                    break
                 time.sleep(0.01)
 
-            self.channel.close()
-            self.client.close()
+            try:
+                self.channel.close()
+                self.client.close()
+            except Exception:
+                pass
 
         except Exception as e:
             self.error_occurred.emit(str(e))
+        finally:
+            # If the loop ended without a user-requested stop(), the link dropped.
+            if self._running:
+                self.disconnected.emit("Connection closed.")
 
     def _scan_cwd(self, data):
         """Detect the shell's working directory from OSC 7 sequences and emit

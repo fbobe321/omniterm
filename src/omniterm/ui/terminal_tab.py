@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QSplitter
+from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QLabel, QPushButton
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebChannel import QWebChannel
 from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QUrl, Qt
@@ -58,11 +58,33 @@ class PyBridge(QObject):
             self.worker.resize(cols, rows)
 
 class TerminalTab(QWidget):
+    reconnect_requested = pyqtSignal()
+    close_requested = pyqtSignal()
+
     def __init__(self, session_name, parent=None):
         super().__init__(parent)
         self.session_name = session_name
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
+
+        # Disconnect banner (hidden until the connection drops)
+        self.disconnect_bar = QWidget()
+        self.disconnect_bar.setStyleSheet(
+            "background-color: #5a1d1d; color: #fff;")
+        bar_layout = QHBoxLayout(self.disconnect_bar)
+        bar_layout.setContentsMargins(8, 4, 8, 4)
+        self.disconnect_label = QLabel("Connection closed.")
+        btn_reconnect = QPushButton("Reconnect")
+        btn_close = QPushButton("Close Tab")
+        btn_reconnect.clicked.connect(self._on_reconnect_clicked)
+        btn_close.clicked.connect(lambda: self.close_requested.emit())
+        bar_layout.addWidget(self.disconnect_label)
+        bar_layout.addStretch(1)
+        bar_layout.addWidget(btn_reconnect)
+        bar_layout.addWidget(btn_close)
+        self.disconnect_bar.hide()
+        self.layout.addWidget(self.disconnect_bar)
 
         self.web_view = QWebEngineView()
         self.layout.addWidget(self.web_view)
@@ -107,11 +129,27 @@ class TerminalTab(QWidget):
     def set_worker(self, worker):
         self.worker = worker
         self.bridge.worker = worker
+        self.disconnect_bar.hide()
         worker.data_received.connect(self.bridge.onDataReceived)
         worker.error_occurred.connect(self.handle_error)
+        if hasattr(worker, "disconnected"):
+            worker.disconnected.connect(self.on_disconnected)
 
     def handle_error(self, error_msg):
         # Ensure the error is visible in the terminal
         self.bridge.onDataReceived.emit(f"\r\n\x1b[31m[ERROR]: {error_msg}\x1b[0m\r\n")
+
+    def on_disconnected(self, message):
+        self.bridge.onDataReceived.emit(
+            f"\r\n\x1b[33m[{message} Use Reconnect or Close Tab.]\x1b[0m\r\n")
+        self.disconnect_label.setText(message)
+        self.disconnect_bar.show()
+
+    def _on_reconnect_clicked(self):
+        self.disconnect_bar.hide()
+        self.reconnect_requested.emit()
+
+    def hide_disconnect_bar(self):
+        self.disconnect_bar.hide()
 
 

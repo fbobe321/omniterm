@@ -5,6 +5,7 @@ import time
 class SerialWorker(QThread):
     data_received = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
+    disconnected = pyqtSignal(str)
 
     def __init__(self, port, baud_rate=115200, data_bits=8, parity='N', stop_bits=1):
         super().__init__()
@@ -44,9 +45,15 @@ class SerialWorker(QThread):
                 
                 time.sleep(0.01)
                 
-            ser.close()
+            try:
+                ser.close()
+            except Exception:
+                pass
         except Exception as e:
             self.error_occurred.emit(str(e))
+        finally:
+            if self._running:
+                self.disconnected.emit("Serial connection closed.")
 
     def stop(self):
         self._running = False
