@@ -25,9 +25,21 @@
     <script>
         var term = new Terminal({
             cursorBlink: true,
+            fontFamily: "Consolas, 'DejaVu Sans Mono', monospace",
+            fontSize: 14,
             theme: {
-                background: '#1e1e1e',
-                foreground: '#ffffff'
+                background: '#181a1f',
+                foreground: '#e6e9ee',
+                cursor: '#38bdf8',
+                cursorAccent: '#181a1f',
+                selectionBackground: '#2b4b63',
+                black:   '#2a2e37', red:     '#f26d78', green:   '#7ee081',
+                yellow:  '#f4d160', blue:    '#61a7f0', magenta: '#c792ea',
+                cyan:    '#56d4c2', white:   '#cdd3dd',
+                brightBlack:   '#5a626f', brightRed:     '#ff8790',
+                brightGreen:   '#9af09c', brightYellow:  '#ffe58a',
+                brightBlue:    '#8cc4ff', brightMagenta: '#dcb1ff',
+                brightCyan:    '#7fecdd', brightWhite:   '#ffffff'
             }
         });
         var fitAddon = new FitAddon.FitAddon();

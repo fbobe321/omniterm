@@ -1,14 +1,17 @@
 from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QMessageBox
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QAction
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QSize
 from omniterm.core.config import load_sessions, delete_session
+from omniterm.ui.icons import get_icon, session_icon
 
 class SessionDock(QDockWidget):
     def __init__(self, parent=None):
-        super().__init__("Sessions", parent)
+        super().__init__("SESSIONS", parent)
         self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
 
         self.tree_view = QTreeView()
+        self.tree_view.setAlternatingRowColors(True)
+        self.tree_view.setIconSize(QSize(18, 18))
         self.model = QStandardItemModel()
         self.model.setHorizontalHeaderLabels(["Sessions"])
         self.tree_view.setModel(self.model)
@@ -68,14 +71,17 @@ class SessionDock(QDockWidget):
                 if s.get("type") == "folder":
                     folder_node = QStandardItem(s.get("name", "Unnamed Folder"))
                     folder_node.setData(s, 32)
+                    folder_node.setIcon(get_icon("folder"))
                     parent_item.appendRow(folder_node)
                     add_session_recursive(folder_node, s.get("children", []))
                 else:
                     session_node = QStandardItem(s.get("name", "Unnamed Session"))
                     session_node.setData(s, 32)
+                    session_node.setIcon(session_icon(s.get("type", "ssh")))
                     parent_item.appendRow(session_node)
 
         root = QStandardItem("All Sessions")
+        root.setIcon(get_icon("folder"))
         add_session_recursive(root, sessions)
         self.model.appendRow(root)
 

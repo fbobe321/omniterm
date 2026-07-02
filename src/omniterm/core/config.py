@@ -68,8 +68,8 @@ def get_shared_sessions_file():
 DEFAULT_TERMINAL_SETTINGS = {
     "fontSize": 14,
     "fontFamily": "Consolas, 'DejaVu Sans Mono', monospace",
-    "foreground": "#ffffff",
-    "background": "#1e1e1e",
+    "foreground": "#e6e9ee",
+    "background": "#181a1f",
 }
 
 def get_terminal_settings():

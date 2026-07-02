@@ -1,7 +1,9 @@
 import os
-from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QInputDialog, QMenu, QCheckBox
-from PyQt6.QtGui import QColor, QDesktopServices
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QInputDialog, QMenu, QCheckBox, QToolBar, QToolButton
+from PyQt6.QtGui import QColor, QDesktopServices, QAction
+from PyQt6.QtCore import Qt, QUrl, QSize
+from omniterm.ui.icons import get_icon
+from omniterm.ui.theme import APP_STYLESHEET
 from omniterm.ui.session_dock import SessionDock
 from omniterm.ui.terminal_tab import TerminalTab, SplitContainer
 from omniterm.ui.sftp_browser import SFTPBrowser
@@ -16,62 +18,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("OmniTerm")
         self.resize(1200, 800)
 
-        # Dark Theme
-        self.setStyleSheet("""
-            QMainWindow { background-color: #1e1e1e; }
-            QTabWidget::pane { border: 1px solid #333; background: #1e1e1e; }
-            QTabBar::tab { 
-                background: #2d2d2d; 
-                color: #aaa; 
-                padding: 8px 15px; 
-                border: 1px solid #333; 
-                border-bottom: none;
-                min-width: 100px;
-            }
-            QTabBar::tab:selected { 
-                background: #3c3c3c; 
-                color: white; 
-                font-weight: bold;
-            }
-            QTreeView { 
-                background-color: #252526; 
-                color: #cccccc; 
-                border: none; 
-                font-family: 'Segoe UI', 'DejaVu Sans', monospace;
-            }
-            QTreeView::item:hover { background-color: #2a2d2e; }
-            QTreeView::item:selected { background-color: #37373d; color: white; }
-            QHeaderView::section { 
-                background-color: #333333; 
-                color: #cccccc; 
-                border: 1px solid #444; 
-                padding: 4px;
-            }
-            QDialog { background-color: #2d2d2d; color: white; }
-            QLineEdit { 
-                background-color: #3c3c3c; 
-                color: white; 
-                border: 1px solid #555; 
-                padding: 4px; 
-                border-radius: 2px;
-            }
-            QPushButton { 
-                background-color: #0e639c; 
-                color: white; 
-                border: none; 
-                padding: 6px 12px; 
-                border-radius: 3px;
-            }
-            QPushButton:hover { background-color: #1177c4; }
-            QComboBox { 
-                background-color: #3c3c3c; 
-                color: white; 
-                border: 1px solid #555; 
-                padding: 4px;
-            }
-            QMenu { background-color: #2d2d2d; color: white; border: 1px solid #444; }
-            QMenu::item:selected { background-color: #0e639c; }
-        """)
+        # Modern dark theme
+        self.setStyleSheet(APP_STYLESHEET)
 
         # Main Tab Widget
         self.tabs = QTabWidget()
@@ -103,9 +51,10 @@ class MainWindow(QMainWindow):
         # Setup Keyboard Shortcuts
         self.setup_shortcuts()
 
-        # Add a simple menu for session management
-        self.menu_bar = self.menuBar()
-        self.session_menu = self.menu_bar.addMenu("&Sessions")
+        # Build the menus (attached to toolbar buttons below, not a menu bar)
+        self.menuBar().hide()
+
+        self.session_menu = QMenu(self)
         self.home_terminal_action = self.session_menu.addAction("New Home Terminal (Local Unix)")
         self.home_terminal_action.triggered.connect(self.open_home_terminal)
         self.session_menu.addSeparator()
@@ -116,8 +65,7 @@ class MainWindow(QMainWindow):
         self.import_sessions_action = self.session_menu.addAction("Import Sessions...")
         self.import_sessions_action.triggered.connect(self.import_sessions_from_file)
 
-        # Split menu (between Sessions and Settings)
-        self.split_menu = self.menu_bar.addMenu("S&plit")
+        self.split_menu = QMenu(self)
         self.split_single_action = self.split_menu.addAction("Single Terminal")
         self.split_single_action.triggered.connect(self.unsplit_current_tab)
         self.split_2h_action = self.split_menu.addAction("2 Panes (Horizontal)")
@@ -127,7 +75,7 @@ class MainWindow(QMainWindow):
         self.split_4_action = self.split_menu.addAction("4 Panes")
         self.split_4_action.triggered.connect(lambda: self.show_split_view_dialog("4"))
 
-        self.settings_menu = self.menu_bar.addMenu("&Settings")
+        self.settings_menu = QMenu(self)
         self.terminal_appearance_action = self.settings_menu.addAction("Terminal Appearance...")
         self.terminal_appearance_action.triggered.connect(self.show_terminal_appearance_dialog)
         self.open_tools_action = self.settings_menu.addAction("Open Home Tools Folder (rsync, etc.)...")
@@ -143,12 +91,41 @@ class MainWindow(QMainWindow):
         self.shell_integration_action = self.settings_menu.addAction("Shell Integration Guide...")
         self.shell_integration_action.triggered.connect(self.show_shell_integration_dialog)
 
-        # Help menu: support link + version
-        self.help_menu = self.menu_bar.addMenu("&Help")
+        self.help_menu = QMenu(self)
         self.github_action = self.help_menu.addAction("GitHub / Support")
         self.github_action.triggered.connect(self.open_github)
         self.about_action = self.help_menu.addAction("About OmniTerm")
         self.about_action.triggered.connect(self.show_about_dialog)
+
+        self._build_toolbar()
+
+    def _build_toolbar(self):
+        toolbar = QToolBar("Main")
+        toolbar.setObjectName("ribbon")
+        toolbar.setMovable(False)
+        toolbar.setIconSize(QSize(26, 26))
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, toolbar)
+
+        def add_button(label, icon_name, menu=None, slot=None):
+            btn = QToolButton()
+            btn.setText(label)
+            btn.setIcon(get_icon(icon_name))
+            btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+            if menu is not None:
+                btn.setMenu(menu)
+                btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            if slot is not None:
+                btn.clicked.connect(slot)
+            toolbar.addWidget(btn)
+            return btn
+
+        add_button("Sessions", "session", menu=self.session_menu)
+        add_button("Home", "home", slot=self.open_home_terminal)
+        toolbar.addSeparator()
+        add_button("Split", "split", menu=self.split_menu)
+        toolbar.addSeparator()
+        add_button("Settings", "settings", menu=self.settings_menu)
+        add_button("Help", "help", menu=self.help_menu)
 
     # layout key -> (pane count, splitter orientation, title)
     # "Horizontal" = a horizontal divider (panes stacked); "Vertical" = a

@@ -1,6 +1,6 @@
 from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView, QWidget, QVBoxLayout, QCheckBox
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QAction, QDrag
-from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl
+from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl, QSize
 import os
 import stat
 import posixpath
@@ -8,6 +8,7 @@ import tempfile
 import time
 import shutil
 from omniterm.core.config import get_group_folders_first, set_group_folders_first
+from omniterm.ui.icons import get_icon, file_icon
 
 
 class _LocalAttr:
@@ -171,8 +172,10 @@ class SFTPBrowser(QDockWidget):
     error_occurred = pyqtSignal(str)
 
     def __init__(self, parent=None):
-        super().__init__("Remote Files", parent)
+        super().__init__("FILES", parent)
         self.tree_view = SFTPTreeView(self)
+        self.tree_view.setAlternatingRowColors(True)
+        self.tree_view.setIconSize(QSize(18, 18))
         self.model = QStandardItemModel()
         self.model.setHorizontalHeaderLabels(["Name", "Size", "Modified"])
         self.tree_view.setModel(self.model)
@@ -369,8 +372,9 @@ class SFTPBrowser(QDockWidget):
 
         # Parent ("..") entry, unless we are at the filesystem root
         if path not in ("/", ""):
-            up_item = QStandardItem("📁 ..")
+            up_item = QStandardItem("..")
             up_item.setEditable(False)
+            up_item.setIcon(get_icon("folder"))
             up_item.setData(posixpath.normpath(posixpath.join(path, "..")), PATH_ROLE)
             up_item.setData(True, ISDIR_ROLE)
             up_item.setData(True, PARENT_ROLE)
@@ -396,8 +400,9 @@ class SFTPBrowser(QDockWidget):
             is_dir = is_dir_of(attr)
             full_path = posixpath.join(path, name)
 
-            name_item = QStandardItem(f"📁 {name}" if is_dir else f"   {name}")
+            name_item = QStandardItem(name)
             name_item.setEditable(False)
+            name_item.setIcon(file_icon(name, is_dir))
             name_item.setData(full_path, PATH_ROLE)
             name_item.setData(is_dir, ISDIR_ROLE)
             name_item.setData(False, PARENT_ROLE)
