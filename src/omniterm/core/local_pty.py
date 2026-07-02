@@ -21,30 +21,31 @@ class LocalPTYWorker(QThread):
         self.prefer_unix = prefer_unix
 
     def _windows_command(self):
-        """Pick the best available shell on Windows. When prefer_unix is set,
-        look for a Unix environment (ls/grep/awk/scp/rsync...) before cmd."""
+        """Pick the best available shell on Windows. Returns (argv_list, label).
+        A list avoids quoting problems with paths that contain spaces. When
+        prefer_unix is set, look for a Unix environment before cmd."""
         if not self.prefer_unix:
-            return 'cmd.exe', 'cmd.exe'
+            return ['cmd.exe'], 'cmd.exe'
 
         for path in (r"C:\Program Files\Git\bin\bash.exe",
                      r"C:\Program Files\Git\usr\bin\bash.exe",
                      r"C:\Program Files (x86)\Git\bin\bash.exe"):
             if os.path.exists(path):
-                return f'"{path}" --login -i', "Git Bash"
+                return [path, '--login', '-i'], "Git Bash"
 
         bash = shutil.which('bash')
         if bash:
-            return f'"{bash}" --login -i', "bash"
+            return [bash, '--login', '-i'], "bash"
 
         wsl = shutil.which('wsl')
         if wsl:
-            return wsl, "WSL"
+            return [wsl], "WSL"
 
         busybox = shutil.which('busybox')
         if busybox:
-            return f'"{busybox}" sh', "BusyBox"
+            return [busybox, 'sh'], "BusyBox"
 
-        return 'cmd.exe', None  # None -> no unix env found
+        return ['cmd.exe'], None  # None -> no unix env found
 
     def run(self):
         try:
