@@ -112,3 +112,12 @@ class TerminalTab(QWidget):
         # Ensure the error is visible in the terminal
         self.bridge.onDataReceived.emit(f"\r\n\x1b[31m[ERROR]: {error_msg}\x1b[0m\r\n")
 
+    def refresh_view(self):
+        """QtWebEngine can render blank after the widget is reparented (e.g. moved
+        into a split). Nudge it to recomposite and re-fit xterm to the new size."""
+        self.web_view.hide()
+        self.web_view.show()
+        if self._page_loaded:
+            self.web_view.page().runJavaScript(
+                "if (window.fitAddon) { window.fitAddon.fit(); }")
+

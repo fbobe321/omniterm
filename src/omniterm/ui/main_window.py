@@ -1,7 +1,7 @@
 import os
 from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QToolButton, QInputDialog, QMenu, QCheckBox
 from PyQt6.QtGui import QColor, QDesktopServices
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt, QUrl, QTimer
 from omniterm.ui.session_dock import SessionDock
 from omniterm.ui.terminal_tab import TerminalTab, SplitContainer
 from omniterm.ui.sftp_browser import SFTPBrowser
@@ -216,6 +216,12 @@ class MainWindow(QMainWindow):
 
         self.tabs.addTab(container, f"Split x{len(widgets)}")
         self.tabs.setCurrentWidget(container)
+
+        # QtWebEngine views can go blank after reparenting; nudge them once the
+        # split layout has settled.
+        for term in container.terminals:
+            if hasattr(term, "refresh_view"):
+                QTimer.singleShot(0, term.refresh_view)
         return container
 
     def on_session_selected(self, index):
