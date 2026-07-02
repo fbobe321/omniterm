@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView
+from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView, QWidget, QVBoxLayout, QCheckBox
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QAction, QDrag
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl
 import os
@@ -137,7 +137,21 @@ class SFTPBrowser(QDockWidget):
         header.setSortIndicator(0, Qt.SortOrder.AscendingOrder)
         header.sectionClicked.connect(self.on_header_clicked)
 
-        self.setWidget(self.tree_view)
+        # "Follow terminal folder" checkbox above the tree
+        self.follow_check = QCheckBox("Follow terminal folder")
+        self.follow_check.setToolTip(
+            "Keep this panel in sync with the shell's current directory "
+            "(requires the remote shell to emit OSC 7 - see docs).")
+        self.follow_check.toggled.connect(self._on_follow_toggled)
+
+        container = QWidget()
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 0, 0, 0)
+        vbox.setSpacing(2)
+        vbox.addWidget(self.follow_check)
+        vbox.addWidget(self.tree_view)
+        self.setWidget(container)
+
         self.sftp = None
         self.current_path = "."
         self.sort_column = 0   # 0=name, 1=size, 2=modified
@@ -149,6 +163,7 @@ class SFTPBrowser(QDockWidget):
         self._states = {}
         self.active_worker = None
         self._active_state = None
+        self._latest_cwd = {}  # id(worker) -> last reported shell cwd
 
     def _ensure_connected(self):
         if self.sftp is None:
@@ -190,11 +205,29 @@ class SFTPBrowser(QDockWidget):
     def _activate_state(self, state):
         self._active_state = state
         self.sftp = state["sftp"]
-        self.current_path = state["path"]
+        # When following, jump to the shell's last-known dir for this worker
+        path = state["path"]
+        if self.follow_check.isChecked():
+            path = self._latest_cwd.get(id(state["worker"]), path)
+        self.current_path = path
         self.list_directory(self.current_path)
+
+    def on_terminal_cwd(self, worker, path):
+        """Called when a worker's shell reports its working directory."""
+        self._latest_cwd[id(worker)] = path
+        if (self.follow_check.isChecked() and worker is self.active_worker
+                and path and path != self.current_path):
+            self.list_directory(path)
+
+    def _on_follow_toggled(self, enabled):
+        if enabled and self.active_worker is not None:
+            path = self._latest_cwd.get(id(self.active_worker))
+            if path and path != self.current_path:
+                self.list_directory(path)
 
     def forget_worker(self, worker):
         """Drop cached SFTP state for a worker whose tab was closed."""
+        self._latest_cwd.pop(id(worker), None)
         state = self._states.pop(id(worker), None)
         if state is not None:
             try:

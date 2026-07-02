@@ -135,36 +135,42 @@ class MainWindow(QMainWindow):
         self.shell_integration_action.triggered.connect(self.show_shell_integration_dialog)
 
     def show_split_view_dialog(self, default_count=2):
-        from omniterm.core.config import load_sessions
+        # Candidate tabs = currently open single terminals (not already-split tabs)
+        candidates = []
+        for i in range(self.tabs.count()):
+            widget = self.tabs.widget(i)
+            if getattr(widget, "terminals", None) is None and hasattr(widget, "worker"):
+                candidates.append((self.tabs.tabText(i), widget))
 
-        flat = []
-        def walk(session_list):
-            for s in session_list:
-                if s.get("type") == "folder":
-                    walk(s.get("children", []))
-                else:
-                    flat.append(s)
-        walk(load_sessions().get("sessions", []))
+        if len(candidates) < 2:
+            QMessageBox.information(
+                self, "Split View",
+                "Open at least two session tabs first, then split them into one view.")
+            return
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("Split View")
+        dialog.setWindowTitle("Split Open Tabs")
         layout = QFormLayout(dialog)
 
+        max_panes = min(4, len(candidates))
+        count_options = [str(n) for n in (2, 4) if n <= max_panes] or ["2"]
         count_combo = QComboBox()
-        count_combo.addItems(["1", "2", "4"])
-        count_combo.setCurrentText(str(default_count) if str(default_count) in ("1", "2", "4") else "2")
+        count_combo.addItems(count_options)
+        wanted = str(default_count)
+        count_combo.setCurrentText(wanted if wanted in count_options else count_options[0])
         layout.addRow("Panes:", count_combo)
 
         pickers = []
         for i in range(4):
             combo = QComboBox()
-            combo.addItem("Local Terminal", {"name": "Local Terminal", "type": "local"})
-            for s in flat:
-                combo.addItem(f"{s.get('name', 'Unnamed')} ({s.get('type', '?')})", s)
+            for label, widget in candidates:
+                combo.addItem(label, widget)
+            # Default each pane to a different open tab
+            if i < len(candidates):
+                combo.setCurrentIndex(i)
             pickers.append(combo)
             layout.addRow(f"Pane {i + 1}:", combo)
 
-        # Row 0 is the count combo; pane rows are 1..4
         def update_rows():
             n = int(count_combo.currentText())
             for i in range(4):
@@ -176,15 +182,34 @@ class MainWindow(QMainWindow):
 
         def open_it():
             n = int(count_combo.currentText())
-            sessions = [pickers[i].currentData() for i in range(n)]
+            chosen, seen = [], set()
+            for i in range(n):
+                widget = pickers[i].currentData()
+                if widget is not None and id(widget) not in seen:
+                    seen.add(id(widget))
+                    chosen.append(widget)
             dialog.accept()
-            self.open_split_tab(n, sessions)
+            if len(chosen) >= 2:
+                self.combine_tabs_into_split(n, chosen)
 
-        btn = QPushButton("Open")
+        btn = QPushButton("Split")
         btn.clicked.connect(open_it)
         layout.addRow(btn)
 
         dialog.exec()
+
+    def combine_tabs_into_split(self, count, widgets):
+        """Move the given already-open terminal tabs into a single split tab."""
+        container = SplitContainer(count)
+        for widget in widgets:
+            idx = self.tabs.indexOf(widget)
+            if idx != -1:
+                self.tabs.removeTab(idx)  # detach without deleting/stopping it
+            container.add_terminal(widget)  # reparents into the splitter
+
+        self.tabs.addTab(container, f"Split x{len(widgets)}")
+        self.tabs.setCurrentWidget(container)
+        return container
 
     def on_session_selected(self, index):
         item = self.session_dock.model.itemFromIndex(index)
@@ -226,6 +251,8 @@ class MainWindow(QMainWindow):
                 # hands it over; the panel shows the active tab's connection.
                 worker.sftp_ready.connect(
                     lambda payload, w=worker: self.sftp_browser.attach_sftp(w, payload[0], payload[1]))
+                worker.cwd_changed.connect(
+                    lambda path, w=worker: self.sftp_browser.on_terminal_cwd(w, path))
             worker.start()
 
         return tab
@@ -236,19 +263,6 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(tab, session_name)
         self.tabs.setCurrentWidget(tab)
         return tab
-
-    def open_split_tab(self, count, sessions):
-        """Open a single tab split into `count` panes, one terminal per given
-        session dict."""
-        container = SplitContainer(count)
-        for session_data in sessions:
-            session_type = session_data.get("type", "local")
-            term = self.build_terminal(session_type, session_data)
-            container.add_terminal(term)
-
-        self.tabs.addTab(container, f"Split x{count}")
-        self.tabs.setCurrentWidget(container)
-        return container
 
     def _primary_ssh_worker(self, widget):
         """The SSH worker whose files should be shown for `widget` (a tab).

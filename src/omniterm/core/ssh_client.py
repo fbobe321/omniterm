@@ -5,13 +5,20 @@ import os
 import socket
 import select
 import threading
+import re
+import urllib.parse
 from omniterm.core.config import decrypt_password
+
+# OSC 7 sequence a shell can emit to report its working directory:
+#   ESC ] 7 ; file://host/path  (BEL or ESC-backslash terminator)
+_OSC7_RE = re.compile(r'\x1b\]7;file://[^/]*(/[^\x07\x1b]*)(?:\x07|\x1b\\)')
 
 class SSHWorker(QThread):
     data_received = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
     auth_success = pyqtSignal()
     sftp_ready = pyqtSignal(object)  # emits (SFTPClient, home_path)
+    cwd_changed = pyqtSignal(str)    # remote working directory (via OSC 7)
 
     def __init__(self, session_data):
         super().__init__()
@@ -71,10 +78,13 @@ class SSHWorker(QThread):
                 # Give it a moment to execute
                 time.sleep(0.5)
 
+            self._osc_buffer = ""
+            self._last_cwd = None
             while self._running:
                 if self.channel.recv_ready():
                     data = self.channel.recv(1024).decode('utf-8', errors='replace')
                     self.data_received.emit(data)
+                    self._scan_cwd(data)
                 time.sleep(0.01)
 
             self.channel.close()
@@ -82,6 +92,20 @@ class SSHWorker(QThread):
 
         except Exception as e:
             self.error_occurred.emit(str(e))
+
+    def _scan_cwd(self, data):
+        """Detect the shell's working directory from OSC 7 sequences and emit
+        cwd_changed when it changes."""
+        self._osc_buffer += data
+        if len(self._osc_buffer) > 4096:
+            self._osc_buffer = self._osc_buffer[-4096:]
+        matches = _OSC7_RE.findall(self._osc_buffer)
+        if matches:
+            path = urllib.parse.unquote(matches[-1])
+            self._osc_buffer = ""
+            if path and path != self._last_cwd:
+                self._last_cwd = path
+                self.cwd_changed.emit(path)
 
     # --- X11 forwarding ---------------------------------------------------
     def _setup_x11(self):
