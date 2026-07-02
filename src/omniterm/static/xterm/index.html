@@ -108,14 +108,13 @@
                 }
             });
 
-            // Double-click selects a word; copy it to the clipboard.
-            document.getElementById('terminal').addEventListener('dblclick', function () {
-                setTimeout(function () {   // let xterm select the word first
-                    var sel = term.getSelection();
-                    if (sel && pybridge.copyToClipboard) {
-                        pybridge.copyToClipboard(sel);
-                    }
-                }, 0);
+            // Copy on select: any selection (drag-select or double-click a word)
+            // is copied to the clipboard.
+            term.onSelectionChange(function () {
+                var sel = term.getSelection();
+                if (sel && pybridge.copyToClipboard) {
+                    pybridge.copyToClipboard(sel);
+                }
             });
 
             // Fit now that the bridge is ready and report the initial size
