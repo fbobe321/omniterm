@@ -138,7 +138,7 @@ class LocalPTYWorker(QThread):
                 self._maybe_start_inshellisense()
                 while self._running:
                     try:
-                        data = self.pty.read(1024)
+                        data = self.pty.read(65536)
                         if data:
                             self.data_received.emit(data)
                         elif not self.pty.isalive():
@@ -180,10 +180,20 @@ class LocalPTYWorker(QThread):
                 while self._running:
                     r, w, e = select.select([self.master_fd], [], [], 0.1)
                     if r:
-                        raw = os.read(self.master_fd, 1024)
-                        if not raw:  # EOF: the shell exited
+                        # Drain all available bytes into one chunk so a line
+                        # redraw renders atomically (no visible cursor jump).
+                        chunk = b""
+                        while True:
+                            part = os.read(self.master_fd, 65536)
+                            if not part:
+                                break
+                            chunk += part
+                            more, _, _ = select.select([self.master_fd], [], [], 0)
+                            if not more or len(chunk) >= 262144:
+                                break
+                        if not chunk:  # EOF: the shell exited
                             break
-                        self.data_received.emit(raw.decode('utf-8', errors='replace'))
+                        self.data_received.emit(chunk.decode('utf-8', errors='replace'))
                     time.sleep(0.01)
 
                 try:

@@ -93,12 +93,23 @@ class SSHWorker(QThread):
             self._last_cwd = None
             while self._running:
                 if self.channel.recv_ready():
-                    raw = self.channel.recv(1024)
-                    if not raw:  # EOF: remote closed the connection
+                    # Drain all currently-available bytes into one chunk so a
+                    # line redraw (\r + reprint) reaches the terminal as a single
+                    # write and renders atomically (no visible cursor jump).
+                    chunk = b""
+                    eof = False
+                    while self.channel.recv_ready() and len(chunk) < 131072:
+                        part = self.channel.recv(32768)
+                        if not part:
+                            eof = True
+                            break
+                        chunk += part
+                    if chunk:
+                        data = chunk.decode('utf-8', errors='replace')
+                        self.data_received.emit(data)
+                        self._scan_cwd(data)
+                    if eof:
                         break
-                    data = raw.decode('utf-8', errors='replace')
-                    self.data_received.emit(data)
-                    self._scan_cwd(data)
                 elif self.channel.closed or self.channel.exit_status_ready():
                     break
                 time.sleep(0.01)
