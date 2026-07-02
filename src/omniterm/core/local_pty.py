@@ -3,6 +3,7 @@ import subprocess
 import os
 import shutil
 import time
+from omniterm.core.config import HOME_DIR
 
 class LocalPTYWorker(QThread):
     data_received = pyqtSignal(str)
@@ -19,6 +20,50 @@ class LocalPTYWorker(QThread):
         self.rows = 24
         # "Home" terminal: prefer a Unix-like shell (Git Bash/WSL/BusyBox on Windows)
         self.prefer_unix = prefer_unix
+
+    def _tools_dir(self):
+        """OmniTerm's own bin dir, added to the Home terminal PATH so users can
+        drop tools (e.g. rsync.exe) there and have them available."""
+        path = os.path.join(str(HOME_DIR), "bin")
+        try:
+            os.makedirs(path, exist_ok=True)
+        except Exception:
+            pass
+        return path
+
+    def _env_with_tools(self):
+        env = dict(os.environ)
+        env["PATH"] = self._tools_dir() + os.pathsep + env.get("PATH", "")
+        return env
+
+    def _find_rsync(self):
+        """Return a path to an available rsync, or None."""
+        candidates = [os.path.join(self._tools_dir(), "rsync.exe" if os.name == "nt" else "rsync")]
+        if os.name == "nt":
+            candidates += [
+                r"C:\Program Files\Git\usr\bin\rsync.exe",
+                r"C:\Program Files\Git\mingw64\bin\rsync.exe",
+                r"C:\Program Files (x86)\Git\usr\bin\rsync.exe",
+            ]
+        for c in candidates:
+            if os.path.exists(c):
+                return c
+        return shutil.which("rsync")
+
+    def _emit_rsync_status(self):
+        if self._find_rsync():
+            self.data_received.emit(
+                "\x1b[36m[OmniTerm Home] rsync: available\x1b[0m\r\n")
+        else:
+            tools = self._tools_dir()
+            self.data_received.emit(
+                "\x1b[33m[OmniTerm Home] rsync not found. To enable file syncing: "
+                "use WSL, run 'pacman -S rsync' in a Git-for-Windows SDK, or drop "
+                f"rsync.exe (with its msys-*.dll) into:\r\n  {tools}\r\n"
+                "That folder is on this terminal's PATH.\x1b[0m\r\n"
+                if os.name == "nt" else
+                "\x1b[33m[OmniTerm Home] rsync not found. Install it via your package "
+                f"manager, or drop an rsync binary into {tools} (it's on PATH).\x1b[0m\r\n")
 
     def _windows_command(self):
         """Pick the best available shell on Windows. Returns (argv_list, label).
@@ -56,7 +101,9 @@ class LocalPTYWorker(QThread):
                     from winpty import PtyProcess
                 except ImportError:
                     from pywinpty import PtyProcess  # older/alternate layouts
-                self.pty = PtyProcess.spawn(command, dimensions=(self.rows, self.cols))
+                spawn_env = self._env_with_tools() if self.prefer_unix else None
+                self.pty = PtyProcess.spawn(
+                    command, dimensions=(self.rows, self.cols), env=spawn_env)
                 if self.prefer_unix:
                     if backend:
                         self.data_received.emit(
@@ -66,6 +113,7 @@ class LocalPTYWorker(QThread):
                             "\x1b[33m[OmniTerm Home] No Unix environment found (Git Bash / WSL / "
                             "BusyBox). Falling back to cmd. Install Git for Windows or WSL for "
                             "ls/grep/awk/scp/rsync.\x1b[0m\r\n")
+                    self._emit_rsync_status()
                 while self._running:
                     try:
                         data = self.pty.read(1024)
@@ -94,12 +142,16 @@ class LocalPTYWorker(QThread):
                     os.dup2(slave, 0)
                     os.dup2(slave, 1)
                     os.dup2(slave, 2)
+                    if self.prefer_unix:
+                        os.environ["PATH"] = self._tools_dir() + os.pathsep + os.environ.get("PATH", "")
                     try:
                         os.execv(shell, [shell])
                     except Exception:
                         os._exit(1)
 
                 os.close(slave)
+                if self.prefer_unix:
+                    self._emit_rsync_status()
 
                 while self._running:
                     r, w, e = select.select([self.master_fd], [], [], 0.1)

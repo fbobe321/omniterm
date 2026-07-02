@@ -6,7 +6,57 @@ import stat
 import posixpath
 import tempfile
 import time
+import shutil
 from omniterm.core.config import get_group_folders_first, set_group_folders_first
+
+
+class _LocalAttr:
+    """Mimics paramiko's SFTPAttributes for the fields the browser reads."""
+    __slots__ = ("filename", "st_mode", "st_size", "st_mtime")
+
+    def __init__(self, filename, st_mode, st_size, st_mtime):
+        self.filename = filename
+        self.st_mode = st_mode
+        self.st_size = st_size
+        self.st_mtime = st_mtime
+
+
+class LocalFSAdapter:
+    """Exposes the subset of the paramiko SFTP API the browser uses, backed by
+    the local filesystem. Paths use forward slashes so the browser's posixpath
+    logic works on Windows too (os.* accepts forward slashes there)."""
+
+    def normalize(self, path):
+        return os.path.abspath(os.path.expanduser(path)).replace("\\", "/")
+
+    def listdir(self, path):
+        return os.listdir(path)
+
+    def listdir_attr(self, path):
+        entries = []
+        try:
+            with os.scandir(path) as it:
+                for entry in it:
+                    try:
+                        st = entry.stat()
+                        entries.append(_LocalAttr(entry.name, st.st_mode, st.st_size, st.st_mtime))
+                    except OSError:
+                        continue
+        except OSError as e:
+            raise e
+        return entries
+
+    def get(self, remote, local):
+        shutil.copy2(remote, local)
+
+    def put(self, local, remote):
+        shutil.copy2(local, remote)
+
+    def mkdir(self, path):
+        os.mkdir(path)
+
+    def close(self):
+        pass
 
 # Custom item data roles
 PATH_ROLE = 32      # full remote path for the entry
@@ -187,6 +237,15 @@ class SFTPBrowser(QDockWidget):
         state = {"sftp": sftp, "path": home_path or ".", "worker": ssh_worker}
         self._states[id(ssh_worker)] = state
         if ssh_worker is self.active_worker:
+            self._activate_state(state)
+
+    def attach_local(self, worker, start_path=None):
+        """Register a local-filesystem browser for a local/home terminal worker."""
+        adapter = LocalFSAdapter()
+        path = adapter.normalize(start_path or "~")
+        state = {"sftp": adapter, "path": path, "worker": worker}
+        self._states[id(worker)] = state
+        if worker is self.active_worker:
             self._activate_state(state)
 
     def show_worker(self, worker):

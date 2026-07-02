@@ -302,6 +302,9 @@ class MainWindow(QMainWindow):
                 lambda payload, w=worker: self.sftp_browser.attach_sftp(w, payload[0], payload[1]))
             worker.cwd_changed.connect(
                 lambda path, w=worker: self.sftp_browser.on_terminal_cwd(w, path))
+        elif isinstance(worker, LocalPTYWorker):
+            # Local/home terminals show the local filesystem in the Files panel.
+            self.sftp_browser.attach_local(worker, os.path.expanduser("~"))
         worker.start()
 
     def _wire_terminal(self, tab, session_type, session_data):
@@ -367,28 +370,30 @@ class MainWindow(QMainWindow):
     def open_home_terminal(self):
         self.create_terminal_tab("home", {"name": "Home", "type": "home"})
 
-    def _primary_ssh_worker(self, widget):
-        """The SSH worker whose files should be shown for `widget` (a tab).
-        For split tabs, the first SSH pane wins; None if there is no SSH pane."""
+    def _primary_fs_worker(self, widget):
+        """The worker whose files should be shown for `widget` (a tab): prefer
+        an SSH pane (remote SFTP), else a local/home pane (local filesystem)."""
         if widget is None:
             return None
         terminals = getattr(widget, "terminals", None)
         candidates = terminals if terminals is not None else [widget]
         for term in candidates:
-            worker = getattr(term, "worker", None)
-            if isinstance(worker, SSHWorker):
-                return worker
+            if isinstance(getattr(term, "worker", None), SSHWorker):
+                return term.worker
+        for term in candidates:
+            if isinstance(getattr(term, "worker", None), LocalPTYWorker):
+                return term.worker
         return None
 
     def on_tab_changed(self, index):
         widget = self.tabs.widget(index) if index >= 0 else None
-        self.sftp_browser.show_worker(self._primary_ssh_worker(widget))
+        self.sftp_browser.show_worker(self._primary_fs_worker(widget))
 
     def _stop_terminal(self, term):
         worker = getattr(term, "worker", None)
         if not worker:
             return
-        if isinstance(worker, SSHWorker):
+        if isinstance(worker, (SSHWorker, LocalPTYWorker)):
             self.sftp_browser.forget_worker(worker)
         try:
             worker.data_received.disconnect()
