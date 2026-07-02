@@ -115,10 +115,14 @@ class MainWindow(QMainWindow):
 
         # Split menu (between Sessions and Settings)
         self.split_menu = self.menu_bar.addMenu("S&plit")
-        self.split2_action = self.split_menu.addAction("Split into 2 Panes...")
-        self.split2_action.triggered.connect(lambda: self.show_split_view_dialog(2))
-        self.split4_action = self.split_menu.addAction("Split into 4 Panes...")
-        self.split4_action.triggered.connect(lambda: self.show_split_view_dialog(4))
+        self.split_single_action = self.split_menu.addAction("Single Terminal")
+        self.split_single_action.triggered.connect(self.unsplit_current_tab)
+        self.split_2h_action = self.split_menu.addAction("2 Panes (Horizontal)")
+        self.split_2h_action.triggered.connect(lambda: self.show_split_view_dialog("2h"))
+        self.split_2v_action = self.split_menu.addAction("2 Panes (Vertical)")
+        self.split_2v_action.triggered.connect(lambda: self.show_split_view_dialog("2v"))
+        self.split_4_action = self.split_menu.addAction("4 Panes")
+        self.split_4_action.triggered.connect(lambda: self.show_split_view_dialog("4"))
 
         self.settings_menu = self.menu_bar.addMenu("&Settings")
         self.terminal_appearance_action = self.settings_menu.addAction("Terminal Appearance...")
@@ -141,7 +145,26 @@ class MainWindow(QMainWindow):
         self.about_action = self.help_menu.addAction("About OmniTerm")
         self.about_action.triggered.connect(self.show_about_dialog)
 
-    def show_split_view_dialog(self, default_count=2):
+    # layout key -> (pane count, splitter orientation, title)
+    SPLIT_LAYOUTS = {
+        "2h": (2, "horizontal", "2 Panes (Horizontal)"),
+        "2v": (2, "vertical", "2 Panes (Vertical)"),
+        "4": (4, "horizontal", "4 Panes"),
+    }
+
+    def unsplit_current_tab(self):
+        index = self.tabs.currentIndex()
+        if index >= 0 and getattr(self.tabs.widget(index), "terminals", None) is not None:
+            self.unsplit_tab(index)
+        else:
+            QMessageBox.information(
+                self, "Single Terminal",
+                "The current tab isn't split. 'Single Terminal' unsplits a split "
+                "tab back into individual tabs.")
+
+    def show_split_view_dialog(self, layout_key="2h"):
+        count, orientation, title = self.SPLIT_LAYOUTS.get(layout_key, self.SPLIT_LAYOUTS["2h"])
+
         # Candidate tabs = currently open single terminals (not already-split tabs)
         candidates = []
         for i in range(self.tabs.count()):
@@ -156,63 +179,46 @@ class MainWindow(QMainWindow):
             return
 
         dialog = QDialog(self)
-        dialog.setWindowTitle("Split Open Tabs")
-        layout = QFormLayout(dialog)
-
-        max_panes = min(4, len(candidates))
-        count_options = [str(n) for n in (2, 4) if n <= max_panes] or ["2"]
-        count_combo = QComboBox()
-        count_combo.addItems(count_options)
-        wanted = str(default_count)
-        count_combo.setCurrentText(wanted if wanted in count_options else count_options[0])
-        layout.addRow("Panes:", count_combo)
+        dialog.setWindowTitle(title)
+        form = QFormLayout(dialog)
 
         pickers = []
-        for i in range(4):
+        for i in range(count):
             combo = QComboBox()
             for label, widget in candidates:
                 combo.addItem(label, widget)
-            # Default each pane to a different open tab
             if i < len(candidates):
-                combo.setCurrentIndex(i)
+                combo.setCurrentIndex(i)  # default each pane to a different tab
             pickers.append(combo)
-            layout.addRow(f"Pane {i + 1}:", combo)
-
-        def update_rows():
-            n = int(count_combo.currentText())
-            for i in range(4):
-                layout.setRowVisible(i + 1, i < n)
-            dialog.adjustSize()
-
-        count_combo.currentTextChanged.connect(update_rows)
-        update_rows()
+            form.addRow(f"Pane {i + 1}:", combo)
 
         def open_it():
-            n = int(count_combo.currentText())
             chosen, seen = [], set()
-            for i in range(n):
-                widget = pickers[i].currentData()
+            for combo in pickers:
+                widget = combo.currentData()
                 if widget is not None and id(widget) not in seen:
                     seen.add(id(widget))
                     chosen.append(widget)
             dialog.accept()
             if len(chosen) >= 2:
-                self.combine_tabs_into_split(n, chosen)
+                self.combine_tabs_into_split(count, chosen, orientation)
 
         btn = QPushButton("Split")
         btn.clicked.connect(open_it)
-        layout.addRow(btn)
+        form.addRow(btn)
 
         dialog.exec()
 
-    def combine_tabs_into_split(self, count, widgets):
+    def combine_tabs_into_split(self, count, widgets, orientation="horizontal"):
         """Combine the given open terminal tabs into one split tab.
 
         A QWebEngineView goes permanently blank if it is reparented after being
         shown, so instead of moving the existing views we build fresh terminals
         inside the split and transplant the running workers into them.
         """
-        container = SplitContainer(count)
+        qt_orientation = (Qt.Orientation.Vertical if orientation == "vertical"
+                          else Qt.Orientation.Horizontal)
+        container = SplitContainer(count, qt_orientation)
         for old_tab in widgets:
             worker = getattr(old_tab, "worker", None)
 
@@ -349,20 +355,20 @@ class MainWindow(QMainWindow):
         menu = QMenu()
         rename_action = menu.addAction("Rename...")
         split_menu = menu.addMenu("Split View")
-        split1 = split_menu.addAction("1 Pane")
-        split2 = split_menu.addAction("2 Panes")
-        split4 = split_menu.addAction("4 Panes")
+        split_2h = split_menu.addAction("2 Panes (Horizontal)")
+        split_2v = split_menu.addAction("2 Panes (Vertical)")
+        split_4 = split_menu.addAction("4 Panes")
         unsplit_action = menu.addAction("Unsplit") if is_split else None
         close_action = menu.addAction("Close")
         chosen = menu.exec(tab_bar.mapToGlobal(position))
         if chosen == rename_action:
             self.rename_tab(index)
-        elif chosen == split1:
-            self.show_split_view_dialog(1)
-        elif chosen == split2:
-            self.show_split_view_dialog(2)
-        elif chosen == split4:
-            self.show_split_view_dialog(4)
+        elif chosen == split_2h:
+            self.show_split_view_dialog("2h")
+        elif chosen == split_2v:
+            self.show_split_view_dialog("2v")
+        elif chosen == split_4:
+            self.show_split_view_dialog("4")
         elif unsplit_action is not None and chosen == unsplit_action:
             self.unsplit_tab(index)
         elif chosen == close_action:

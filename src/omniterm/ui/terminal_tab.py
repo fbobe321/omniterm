@@ -11,17 +11,18 @@ class SplitContainer(QWidget):
     """Holds 1, 2, or 4 terminal panes in resizable splitters. `terminals`
     lists the TerminalTab widgets so the window can manage/close them."""
 
-    def __init__(self, count, parent=None):
+    def __init__(self, count, orientation=Qt.Orientation.Horizontal, parent=None):
         super().__init__(parent)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         self.terminals = []
 
         if count <= 1:
-            self.root = QSplitter(Qt.Orientation.Horizontal)
+            self.root = QSplitter(orientation)
             self._targets = [self.root]
         elif count == 2:
-            self.root = QSplitter(Qt.Orientation.Horizontal)
+            # Horizontal orientation = side by side; Vertical = stacked
+            self.root = QSplitter(orientation)
             self._targets = [self.root, self.root]
         else:  # 4 -> 2x2
             self.root = QSplitter(Qt.Orientation.Vertical)
