@@ -29,7 +29,7 @@
         // (?win=1), which fixes the cursor-steps-back-then-redraws behavior.
         var _winMode = new URLSearchParams(window.location.search).get('win') === '1';
         var term = new Terminal({
-            cursorBlink: true,
+            cursorBlink: false,
             windowsMode: _winMode,
             fontFamily: "Consolas, 'DejaVu Sans Mono', monospace",
             fontSize: 14,
