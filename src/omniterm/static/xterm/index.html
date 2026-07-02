@@ -108,6 +108,16 @@
                 }
             });
 
+            // Double-click selects a word; copy it to the clipboard.
+            document.getElementById('terminal').addEventListener('dblclick', function () {
+                setTimeout(function () {   // let xterm select the word first
+                    var sel = term.getSelection();
+                    if (sel && pybridge.copyToClipboard) {
+                        pybridge.copyToClipboard(sel);
+                    }
+                }, 0);
+            });
+
             // Fit now that the bridge is ready and report the initial size
             // explicitly (fit() alone won't fire onResize if dimensions are unchanged).
             fitAddon.fit();

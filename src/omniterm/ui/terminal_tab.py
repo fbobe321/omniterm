@@ -57,6 +57,15 @@ class PyBridge(QObject):
         if self.worker and hasattr(self.worker, 'resize'):
             self.worker.resize(cols, rows)
 
+    @pyqtSlot(str)
+    def copyToClipboard(self, text):
+        if not text:
+            return
+        from PyQt6.QtWidgets import QApplication
+        clipboard = QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(text)
+
 class TerminalTab(QWidget):
     reconnect_requested = pyqtSignal()
     close_requested = pyqtSignal()
