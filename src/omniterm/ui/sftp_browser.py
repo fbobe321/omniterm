@@ -1,6 +1,6 @@
-from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView, QWidget, QVBoxLayout, QCheckBox, QLineEdit
+from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView, QWidget, QVBoxLayout, QCheckBox, QLineEdit, QCompleter
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QAction, QDrag
-from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl, QSize
+from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl, QSize, QStringListModel
 import os
 import stat
 import posixpath
@@ -196,6 +196,15 @@ class SFTPBrowser(QDockWidget):
         self.path_edit.setClearButtonEnabled(True)
         self.path_edit.returnPressed.connect(self._on_path_entered)
 
+        # Path autocomplete: suggest directory entries as you type
+        self._completer_model = QStringListModel()
+        self._path_completer = QCompleter(self._completer_model, self)
+        self._path_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._path_completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        self.path_edit.setCompleter(self._path_completer)
+        self.path_edit.textEdited.connect(self._update_completions)
+        self._completer_dir = None  # last directory we listed for completion
+
         # "Follow terminal folder" checkbox above the tree
         self.follow_check = QCheckBox("Follow terminal folder")
         self.follow_check.setToolTip(
@@ -294,6 +303,7 @@ class SFTPBrowser(QDockWidget):
     def _activate_state(self, state):
         self._active_state = state
         self.sftp = state["sftp"]
+        self._completer_dir = None  # refresh path completion for the new connection
         # When following, jump to the shell's last-known dir for this worker
         path = state["path"]
         if self.follow_check.isChecked():
@@ -344,6 +354,30 @@ class SFTPBrowser(QDockWidget):
         except Exception:
             pass
         self.list_directory(target)
+
+    def _update_completions(self, text):
+        """Populate the path completer with the entries of the directory being
+        typed. Lists a directory at most once per directory change."""
+        if self.sftp is None:
+            return
+        # The directory portion is everything up to the last '/'
+        head = text.rsplit("/", 1)[0] if "/" in text else ""
+        directory = head if head else ("/" if text.startswith("/") else self.current_path)
+        if directory == self._completer_dir:
+            return
+        try:
+            entries = self.sftp.listdir_attr(directory)
+        except Exception:
+            return
+        self._completer_dir = directory
+        suggestions = []
+        for attr in entries:
+            is_dir = stat.S_ISDIR(attr.st_mode) if attr.st_mode is not None else False
+            full = posixpath.join(directory, attr.filename)
+            suggestions.append(full + "/" if is_dir else full)
+        suggestions.sort()
+        self._completer_model.setStringList(suggestions)
+        self._path_completer.complete()
 
     def on_header_clicked(self, column):
         if column == self.sort_column:
