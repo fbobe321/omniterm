@@ -5,6 +5,7 @@
     <script src="xterm.js"></script>
     <script src="xterm-addon-fit.js"></script>
     <script src="xterm-addon-canvas.js"></script>
+    <script src="xterm-addon-webgl.js"></script>
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
     <style>
         body, html {
@@ -47,13 +48,23 @@
         term.loadAddon(fitAddon);
         term.open(document.getElementById('terminal'));
 
-        // Use the canvas renderer instead of the default DOM renderer. The DOM
-        // renderer flickers per-keystroke inside Qt WebEngine; canvas is smooth.
-        try {
-            if (window.CanvasAddon) {
-                term.loadAddon(new CanvasAddon.CanvasAddon());
-            }
-        } catch (e) { /* fall back to the default renderer */ }
+        // The default DOM renderer flickers per-keystroke inside Qt WebEngine.
+        // Prefer the GPU (WebGL) renderer, then canvas, then fall back to DOM.
+        (function () {
+            try {
+                if (window.WebglAddon) {
+                    var webgl = new WebglAddon.WebglAddon();
+                    webgl.onContextLoss(function () { webgl.dispose(); });
+                    term.loadAddon(webgl);
+                    return;
+                }
+            } catch (e) { /* try canvas next */ }
+            try {
+                if (window.CanvasAddon) {
+                    term.loadAddon(new CanvasAddon.CanvasAddon());
+                }
+            } catch (e) { /* fall back to the DOM renderer */ }
+        })();
 
         fitAddon.fit();
 

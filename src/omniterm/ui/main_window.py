@@ -1,4 +1,5 @@
 import os
+import re
 from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QInputDialog, QMenu, QCheckBox, QToolBar, QToolButton
 from PyQt6.QtGui import QColor, QDesktopServices, QAction, QIcon, QPixmap
 from PyQt6.QtCore import Qt, QUrl, QSize, QTimer
@@ -24,6 +25,7 @@ class MainWindow(QMainWindow):
         # Main Tab Widget
         self.tabs = QTabWidget()
         self.tabs.setTabsClosable(True)
+        self.tabs.setMovable(True)  # drag tabs to reorder
         self.tabs.tabCloseRequested.connect(self.close_tab)
         self.setCentralWidget(self.tabs)
 
@@ -474,16 +476,63 @@ class MainWindow(QMainWindow):
                 })
         return tabs
 
+    # Query a shell for its cwd and active conda env via an (invisible) OSC marker.
+    CTX_QUERY = (" printf '\\033]1337;OmniCtx=%s\\037%s\\007' "
+                 "\"$PWD\" \"${CONDA_DEFAULT_ENV:-}\"\r")
+    CTX_RE = re.compile(r'\x1b\]1337;OmniCtx=([^\x1f]*)\x1f([^\x07\x1b]*)(?:\x07|\x1b\\)')
+
     def show_save_layout_dialog(self):
         entries = self.capture_layout()
-        # Flatten terminals for per-terminal init fields
-        term_rows = []
-        for entry in entries:
-            for term in entry["terms"]:
-                term_rows.append(term)
+        term_rows = [t for e in entries for t in e["terms"]]
         if not term_rows:
             QMessageBox.information(self, "Save Layout", "Open some sessions first.")
             return
+
+        # Ask each shell for its cwd + conda env; capture the reply, then show
+        # the dialog after a short delay.
+        self._ctx = {}
+        self._ctx_buffers = {}
+        self._ctx_conns = []
+        for term in term_rows:
+            worker = getattr(term, "worker", None)
+            if worker is None or not hasattr(worker, "send_data"):
+                continue
+            self._ctx_buffers[id(term)] = ""
+
+            def handler(data, tid=id(term)):
+                buf = self._ctx_buffers.get(tid, "") + data
+                self._ctx_buffers[tid] = buf[-8192:]
+                m = self.CTX_RE.search(self._ctx_buffers[tid])
+                if m:
+                    self._ctx[tid] = {"cwd": m.group(1), "conda": m.group(2)}
+
+            worker.data_received.connect(handler)
+            self._ctx_conns.append((worker, handler))
+            try:
+                worker.send_data(self.CTX_QUERY)
+            except Exception:
+                pass
+
+        QTimer.singleShot(450, lambda: self._show_save_layout_dialog(entries, term_rows))
+
+    def _layout_prefill(self, term):
+        ctx = self._ctx.get(id(term), {})
+        cwd = ctx.get("cwd") or self._last_known_dir(term)
+        conda = ctx.get("conda")
+        parts = []
+        if cwd:
+            parts.append(f"cd {cwd}")
+        if conda:
+            parts.append(f"conda activate {conda}")
+        return " && ".join(parts)
+
+    def _show_save_layout_dialog(self, entries, term_rows):
+        for worker, handler in self._ctx_conns:
+            try:
+                worker.data_received.disconnect(handler)
+            except (TypeError, RuntimeError):
+                pass
+        self._ctx_conns = []
 
         dialog = QDialog(self)
         dialog.setWindowTitle("Save Current Layout")
@@ -496,8 +545,7 @@ class MainWindow(QMainWindow):
         init_edits = {}
         for term in term_rows:
             edit = QLineEdit()
-            cwd = self._last_known_dir(term)
-            edit.setText(f"cd {cwd}" if cwd else "")
+            edit.setText(self._layout_prefill(term))
             edit.setPlaceholderText("e.g. cd /path && conda activate myenv")
             init_edits[id(term)] = edit
             form.addRow(f"{getattr(term, 'session_name', 'Terminal')}:", edit)
