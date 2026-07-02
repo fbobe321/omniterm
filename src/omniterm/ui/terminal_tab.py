@@ -79,7 +79,8 @@ class TerminalTab(QWidget):
 
         # Load local index.html
         file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "xterm", "index.html"))
-        self.web_view.setUrl(QUrl.fromLocalFile(file_path))
+        self._index_url = QUrl.fromLocalFile(file_path)
+        self.web_view.setUrl(self._index_url)
 
         # Worker management
         self.worker = None
@@ -114,10 +115,9 @@ class TerminalTab(QWidget):
 
     def refresh_view(self):
         """QtWebEngine can render blank after the widget is reparented (e.g. moved
-        into a split). Nudge it to recomposite and re-fit xterm to the new size."""
-        self.web_view.hide()
-        self.web_view.show()
-        if self._page_loaded:
-            self.web_view.page().runJavaScript(
-                "if (window.fitAddon) { window.fitAddon.fit(); }")
+        into a split). Reloading the page rebuilds the view and reconnects to the
+        still-running worker via the web channel. Scrollback from before the split
+        is lost, but the live session and its output continue."""
+        self._page_loaded = False
+        self.web_view.setUrl(self._index_url)
 
