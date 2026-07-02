@@ -93,17 +93,26 @@ class SSHWorker(QThread):
             self._last_cwd = None
             while self._running:
                 if self.channel.recv_ready():
-                    # Drain all currently-available bytes into one chunk so a
-                    # line redraw (\r + reprint) reaches the terminal as a single
-                    # write and renders atomically (no visible cursor jump).
+                    # Coalesce a burst of output into one write so a line redraw
+                    # (\r + reprint) renders atomically. Wait a few ms for more
+                    # data after each read to catch a redraw that arrives in
+                    # pieces, capped so latency stays imperceptible.
                     chunk = b""
                     eof = False
-                    while self.channel.recv_ready() and len(chunk) < 131072:
-                        part = self.channel.recv(32768)
-                        if not part:
-                            eof = True
-                            break
-                        chunk += part
+                    deadline = time.monotonic() + 0.02
+                    while True:
+                        if self.channel.recv_ready():
+                            part = self.channel.recv(32768)
+                            if not part:
+                                eof = True
+                                break
+                            chunk += part
+                            if len(chunk) >= 131072 or time.monotonic() >= deadline:
+                                break
+                        else:
+                            time.sleep(0.004)  # brief idle-gap wait for more
+                            if not self.channel.recv_ready():
+                                break
                     if chunk:
                         data = chunk.decode('utf-8', errors='replace')
                         self.data_received.emit(data)

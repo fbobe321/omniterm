@@ -180,20 +180,32 @@ class LocalPTYWorker(QThread):
                 while self._running:
                     r, w, e = select.select([self.master_fd], [], [], 0.1)
                     if r:
-                        # Drain all available bytes into one chunk so a line
-                        # redraw renders atomically (no visible cursor jump).
+                        # Coalesce a burst into one write so a line redraw renders
+                        # atomically. Wait a few ms for more data after each read
+                        # (to catch a redraw arriving in pieces), capped so latency
+                        # stays imperceptible.
                         chunk = b""
+                        eof = False
+                        deadline = time.monotonic() + 0.02
                         while True:
-                            part = os.read(self.master_fd, 65536)
+                            try:
+                                part = os.read(self.master_fd, 65536)
+                            except OSError:
+                                eof = True
+                                break
                             if not part:
+                                eof = True
                                 break
                             chunk += part
-                            more, _, _ = select.select([self.master_fd], [], [], 0)
-                            if not more or len(chunk) >= 262144:
+                            if len(chunk) >= 262144 or time.monotonic() >= deadline:
                                 break
-                        if not chunk:  # EOF: the shell exited
+                            more, _, _ = select.select([self.master_fd], [], [], 0.004)
+                            if not more:
+                                break
+                        if chunk:
+                            self.data_received.emit(chunk.decode('utf-8', errors='replace'))
+                        if eof:
                             break
-                        self.data_received.emit(chunk.decode('utf-8', errors='replace'))
                     time.sleep(0.01)
 
                 try:
