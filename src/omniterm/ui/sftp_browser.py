@@ -140,8 +140,9 @@ class SFTPBrowser(QDockWidget):
         # "Follow terminal folder" checkbox above the tree
         self.follow_check = QCheckBox("Follow terminal folder")
         self.follow_check.setToolTip(
-            "Keep this panel in sync with the shell's current directory "
-            "(requires the remote shell to emit OSC 7 - see docs).")
+            "Keep this panel in sync with the shell's current directory. "
+            "Enabling this configures the session's bash prompt to report its "
+            "directory (sends a one-time 'export PROMPT_COMMAND=...').")
         self.follow_check.toggled.connect(self._on_follow_toggled)
 
         container = QWidget()
@@ -163,7 +164,8 @@ class SFTPBrowser(QDockWidget):
         self._states = {}
         self.active_worker = None
         self._active_state = None
-        self._latest_cwd = {}  # id(worker) -> last reported shell cwd
+        self._latest_cwd = {}    # id(worker) -> last reported shell cwd
+        self._bootstrapped = set()  # workers we've configured for OSC 7
 
     def _ensure_connected(self):
         if self.sftp is None:
@@ -202,12 +204,30 @@ class SFTPBrowser(QDockWidget):
             return
         self._activate_state(state)
 
+    # Bash setup that makes the shell report its directory via OSC 7 each prompt.
+    # Sent (once) to a session when "Follow terminal folder" is enabled.
+    FOLLOW_CMD = (
+        ' export PROMPT_COMMAND=\'printf "\\033]7;file://%s%s\\033\\134" "$HOSTNAME" "$PWD"\'\n'
+    )
+
+    def _bootstrap_follow(self, worker):
+        """Configure the shell to emit OSC 7 (bash) so the panel can follow it."""
+        if worker is None or id(worker) in self._bootstrapped:
+            return
+        if hasattr(worker, "send_data"):
+            try:
+                worker.send_data(self.FOLLOW_CMD)
+                self._bootstrapped.add(id(worker))
+            except Exception:
+                pass
+
     def _activate_state(self, state):
         self._active_state = state
         self.sftp = state["sftp"]
         # When following, jump to the shell's last-known dir for this worker
         path = state["path"]
         if self.follow_check.isChecked():
+            self._bootstrap_follow(state["worker"])
             path = self._latest_cwd.get(id(state["worker"]), path)
         self.current_path = path
         self.list_directory(self.current_path)
@@ -221,6 +241,7 @@ class SFTPBrowser(QDockWidget):
 
     def _on_follow_toggled(self, enabled):
         if enabled and self.active_worker is not None:
+            self._bootstrap_follow(self.active_worker)
             path = self._latest_cwd.get(id(self.active_worker))
             if path and path != self.current_path:
                 self.list_directory(path)
@@ -228,6 +249,7 @@ class SFTPBrowser(QDockWidget):
     def forget_worker(self, worker):
         """Drop cached SFTP state for a worker whose tab was closed."""
         self._latest_cwd.pop(id(worker), None)
+        self._bootstrapped.discard(id(worker))
         state = self._states.pop(id(worker), None)
         if state is not None:
             try:
