@@ -1,7 +1,7 @@
 import os
 from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QToolButton, QInputDialog, QMenu, QCheckBox
 from PyQt6.QtGui import QColor, QDesktopServices
-from PyQt6.QtCore import Qt, QUrl, QTimer
+from PyQt6.QtCore import Qt, QUrl
 from omniterm.ui.session_dock import SessionDock
 from omniterm.ui.terminal_tab import TerminalTab, SplitContainer
 from omniterm.ui.sftp_browser import SFTPBrowser
@@ -206,22 +206,43 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def combine_tabs_into_split(self, count, widgets):
-        """Move the given already-open terminal tabs into a single split tab."""
+        """Combine the given open terminal tabs into one split tab.
+
+        A QWebEngineView goes permanently blank if it is reparented after being
+        shown, so instead of moving the existing views we build fresh terminals
+        inside the split and transplant the running workers into them.
+        """
         container = SplitContainer(count)
-        for widget in widgets:
-            idx = self.tabs.indexOf(widget)
+        for old_tab in widgets:
+            worker = getattr(old_tab, "worker", None)
+
+            # Detach the worker from the old tab's view
+            if worker is not None:
+                try:
+                    worker.data_received.disconnect(old_tab.bridge.onDataReceived)
+                except (TypeError, RuntimeError):
+                    pass
+                try:
+                    worker.error_occurred.disconnect(old_tab.handle_error)
+                except (TypeError, RuntimeError):
+                    pass
+
+            # Fresh terminal, created directly inside the split hierarchy
+            new_tab = TerminalTab(old_tab.session_name)
+            new_tab.apply_settings(get_terminal_settings())
+            if worker is not None:
+                new_tab.set_worker(worker)  # reconnects the live worker to the new view
+            container.add_terminal(new_tab)
+
+            # Drop the old tab without stopping the (now transplanted) worker
+            idx = self.tabs.indexOf(old_tab)
             if idx != -1:
-                self.tabs.removeTab(idx)  # detach without deleting/stopping it
-            container.add_terminal(widget)  # reparents into the splitter
+                self.tabs.removeTab(idx)
+            old_tab.worker = None
+            old_tab.deleteLater()
 
-        self.tabs.addTab(container, f"Split x{len(widgets)}")
+        self.tabs.addTab(container, f"Split x{len(container.terminals)}")
         self.tabs.setCurrentWidget(container)
-
-        # QtWebEngine views can go blank after reparenting; nudge them once the
-        # split layout has settled.
-        for term in container.terminals:
-            if hasattr(term, "refresh_view"):
-                QTimer.singleShot(0, term.refresh_view)
         return container
 
     def on_session_selected(self, index):

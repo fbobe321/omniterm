@@ -113,11 +113,4 @@ class TerminalTab(QWidget):
         # Ensure the error is visible in the terminal
         self.bridge.onDataReceived.emit(f"\r\n\x1b[31m[ERROR]: {error_msg}\x1b[0m\r\n")
 
-    def refresh_view(self):
-        """QtWebEngine can render blank after the widget is reparented (e.g. moved
-        into a split). Reloading the page rebuilds the view and reconnects to the
-        still-running worker via the web channel. Scrollback from before the split
-        is lost, but the live session and its output continue."""
-        self._page_loaded = False
-        self.web_view.setUrl(self._index_url)
 
