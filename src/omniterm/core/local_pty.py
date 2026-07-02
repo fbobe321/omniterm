@@ -186,7 +186,7 @@ class LocalPTYWorker(QThread):
                         # stays imperceptible.
                         chunk = b""
                         eof = False
-                        deadline = time.monotonic() + 0.02
+                        deadline = time.monotonic() + 0.03
                         while True:
                             try:
                                 part = os.read(self.master_fd, 65536)
@@ -199,7 +199,7 @@ class LocalPTYWorker(QThread):
                             chunk += part
                             if len(chunk) >= 262144 or time.monotonic() >= deadline:
                                 break
-                            more, _, _ = select.select([self.master_fd], [], [], 0.004)
+                            more, _, _ = select.select([self.master_fd], [], [], 0.008)
                             if not more:
                                 break
                         if chunk:

@@ -99,7 +99,7 @@ class SSHWorker(QThread):
                     # pieces, capped so latency stays imperceptible.
                     chunk = b""
                     eof = False
-                    deadline = time.monotonic() + 0.02
+                    deadline = time.monotonic() + 0.03
                     while True:
                         if self.channel.recv_ready():
                             part = self.channel.recv(32768)
@@ -110,7 +110,7 @@ class SSHWorker(QThread):
                             if len(chunk) >= 131072 or time.monotonic() >= deadline:
                                 break
                         else:
-                            time.sleep(0.004)  # brief idle-gap wait for more
+                            time.sleep(0.008)  # brief idle-gap wait for more
                             if not self.channel.recv_ready():
                                 break
                     if chunk:
