@@ -464,11 +464,13 @@ class MainWindow(QMainWindow):
         tabs = []
         for i in range(self.tabs.count()):
             widget = self.tabs.widget(i)
+            title = self.tabs.tabText(i)  # preserve any custom (renamed) title
             terminals = getattr(widget, "terminals", None)
             if terminals is not None:  # split tab
                 panes = [{"session": self._session_ref(t), "init": ""} for t in terminals]
                 tabs.append({
                     "kind": "split",
+                    "title": title,
                     "count": len(terminals),
                     "orientation": "vertical" if getattr(widget, "root", None) is not None
                                    and widget.root.orientation() == Qt.Orientation.Vertical
@@ -479,6 +481,7 @@ class MainWindow(QMainWindow):
             elif hasattr(widget, "worker"):
                 tabs.append({
                     "kind": "single",
+                    "title": title,
                     "session": self._session_ref(widget),
                     "init": "",
                     "terms": [widget],
@@ -571,11 +574,13 @@ class MainWindow(QMainWindow):
                     for term, pane in zip(entry["terms"], entry["panes"]):
                         panes.append({"session": pane["session"],
                                       "init": init_edits[id(term)].text().strip()})
-                    layout["tabs"].append({"kind": "split", "count": entry["count"],
+                    layout["tabs"].append({"kind": "split", "title": entry.get("title", ""),
+                                           "count": entry["count"],
                                            "orientation": entry["orientation"], "panes": panes})
                 else:
                     term = entry["terms"][0]
-                    layout["tabs"].append({"kind": "single", "session": entry["session"],
+                    layout["tabs"].append({"kind": "single", "title": entry.get("title", ""),
+                                           "session": entry["session"],
                                            "init": init_edits[id(term)].text().strip()})
             save_layout(name, layout)
             dialog.accept()
@@ -632,7 +637,8 @@ class MainWindow(QMainWindow):
                     term = self.build_terminal(stype, sdata, init=pane.get("init") or None)
                     container.add_terminal(term)
                 if container.terminals:
-                    self.tabs.addTab(container, f"Split x{len(container.terminals)}")
+                    title = entry.get("title") or f"Split x{len(container.terminals)}"
+                    self.tabs.addTab(container, title)
                     self.tabs.setCurrentWidget(container)
             else:
                 resolved = self._resolve_ref(entry.get("session", {}))
@@ -640,7 +646,8 @@ class MainWindow(QMainWindow):
                     continue
                 stype, sdata = resolved
                 tab = self.build_terminal(stype, sdata, init=entry.get("init") or None)
-                self.tabs.addTab(tab, sdata.get("name", "Session"))
+                title = entry.get("title") or sdata.get("name", "Session")
+                self.tabs.addTab(tab, title)
                 self.tabs.setCurrentWidget(tab)
 
     def _toggle_inshellisense(self, enabled):
