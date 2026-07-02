@@ -1,5 +1,5 @@
 import os
-from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QToolButton, QInputDialog, QMenu, QCheckBox
+from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QInputDialog, QMenu, QCheckBox
 from PyQt6.QtGui import QColor, QDesktopServices
 from PyQt6.QtCore import Qt, QUrl
 from omniterm.ui.session_dock import SessionDock
@@ -85,13 +85,6 @@ class MainWindow(QMainWindow):
         tab_bar.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         tab_bar.customContextMenuRequested.connect(self.show_tab_context_menu)
 
-        # "Split" button in the tab bar corner: open 1/2/4 terminals side by side
-        self.split_button = QToolButton()
-        self.split_button.setText("▦ Split")
-        self.split_button.setToolTip("Open multiple sessions in a split view (1 / 2 / 4 panes)")
-        self.split_button.clicked.connect(lambda: self.show_split_view_dialog())
-        self.tabs.setCornerWidget(self.split_button, Qt.Corner.TopRightCorner)
-
         # Session Dock
         self.session_dock = SessionDock(self)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.session_dock)
@@ -119,6 +112,13 @@ class MainWindow(QMainWindow):
         self.export_sessions_action.triggered.connect(self.export_sessions_to_file)
         self.import_sessions_action = self.session_menu.addAction("Import Sessions...")
         self.import_sessions_action.triggered.connect(self.import_sessions_from_file)
+
+        # Split menu (between Sessions and Settings)
+        self.split_menu = self.menu_bar.addMenu("S&plit")
+        self.split2_action = self.split_menu.addAction("Split into 2 Panes...")
+        self.split2_action.triggered.connect(lambda: self.show_split_view_dialog(2))
+        self.split4_action = self.split_menu.addAction("Split into 4 Panes...")
+        self.split4_action.triggered.connect(lambda: self.show_split_view_dialog(4))
 
         self.settings_menu = self.menu_bar.addMenu("&Settings")
         self.terminal_appearance_action = self.settings_menu.addAction("Terminal Appearance...")
