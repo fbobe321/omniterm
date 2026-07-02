@@ -130,6 +130,8 @@ class MainWindow(QMainWindow):
         self.settings_menu = self.menu_bar.addMenu("&Settings")
         self.terminal_appearance_action = self.settings_menu.addAction("Terminal Appearance...")
         self.terminal_appearance_action.triggered.connect(self.show_terminal_appearance_dialog)
+        self.open_tools_action = self.settings_menu.addAction("Open Home Tools Folder (rsync, etc.)...")
+        self.open_tools_action.triggered.connect(self.open_tools_folder)
         self.set_home_dir_action = self.settings_menu.addAction("Set Persistent Home Directory...")
         self.set_home_dir_action.triggered.connect(self.show_set_home_dir_dialog)
         self.set_master_password_action = self.settings_menu.addAction("Set Master Password...")
@@ -369,6 +371,24 @@ class MainWindow(QMainWindow):
 
     def open_home_terminal(self):
         self.create_terminal_tab("home", {"name": "Home", "type": "home"})
+
+    def open_tools_folder(self):
+        """Open <home>/bin, which is on the Home terminal's PATH. Drop rsync.exe
+        (and its DLLs) here to make rsync available in Home terminals."""
+        from omniterm.core.config import HOME_DIR
+        tools = os.path.join(str(HOME_DIR), "bin")
+        try:
+            os.makedirs(tools, exist_ok=True)
+        except Exception:
+            pass
+        QDesktopServices.openUrl(QUrl.fromLocalFile(tools))
+        QMessageBox.information(
+            self, "Home Tools Folder",
+            "This folder is on the Home terminal's PATH.\n\n"
+            "Drop rsync.exe (and any DLLs it needs, e.g. msys-2.0.dll from Git's "
+            "usr\\bin, or cygwin1.dll from cwRsync) here, then open a new Home "
+            "terminal and run 'rsync'.\n\n"
+            f"{tools}")
 
     def _primary_fs_worker(self, widget):
         """The worker whose files should be shown for `widget` (a tab): prefer
