@@ -50,7 +50,11 @@ class LocalPTYWorker(QThread):
         try:
             if os.name == 'nt':
                 command, backend = self._windows_command()
-                from pywinpty import PtyProcess
+                # The 'pywinpty' pip package is imported as 'winpty'
+                try:
+                    from winpty import PtyProcess
+                except ImportError:
+                    from pywinpty import PtyProcess  # older/alternate layouts
                 self.pty = PtyProcess.spawn(command, dimensions=(self.rows, self.cols))
                 if self.prefer_unix:
                     if backend:
