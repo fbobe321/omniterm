@@ -146,9 +146,11 @@ class MainWindow(QMainWindow):
         self.about_action.triggered.connect(self.show_about_dialog)
 
     # layout key -> (pane count, splitter orientation, title)
+    # "Horizontal" = a horizontal divider (panes stacked); "Vertical" = a
+    # vertical divider (panes side by side), matching the vim/tmux convention.
     SPLIT_LAYOUTS = {
-        "2h": (2, "horizontal", "2 Panes (Horizontal)"),
-        "2v": (2, "vertical", "2 Panes (Vertical)"),
+        "2h": (2, "vertical", "2 Panes (Horizontal)"),
+        "2v": (2, "horizontal", "2 Panes (Vertical)"),
         "4": (4, "horizontal", "4 Panes"),
     }
 
