@@ -10,7 +10,7 @@ from omniterm.ui.sftp_browser import SFTPBrowser
 from omniterm.core.ssh_client import SSHWorker
 from omniterm.core.serial_client import SerialWorker
 from omniterm.core.local_pty import LocalPTYWorker
-from omniterm.core.config import HOME_DIR, set_home_dir, init_cipher, set_shared_sessions_file, get_terminal_settings, set_terminal_settings, export_sessions, import_sessions, get_use_inshellisense, set_use_inshellisense
+from omniterm.core.config import HOME_DIR, set_home_dir, init_cipher, set_shared_sessions_file, get_terminal_settings, set_terminal_settings, export_sessions, import_sessions, get_use_inshellisense, set_use_inshellisense, get_layouts, save_layout, delete_layout, find_session
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -80,6 +80,11 @@ class MainWindow(QMainWindow):
         self.export_sessions_action.triggered.connect(self.export_sessions_to_file)
         self.import_sessions_action = self.session_menu.addAction("Import Sessions...")
         self.import_sessions_action.triggered.connect(self.import_sessions_from_file)
+        self.session_menu.addSeparator()
+        self.save_layout_action = self.session_menu.addAction("Save Current Layout...")
+        self.save_layout_action.triggered.connect(self.show_save_layout_dialog)
+        self.open_layout_action = self.session_menu.addAction("Open Layout...")
+        self.open_layout_action.triggered.connect(self.show_open_layout_dialog)
 
         self.split_menu = QMenu(self)
         self.split_single_action = self.split_menu.addAction("Single Terminal")
@@ -274,10 +279,15 @@ class MainWindow(QMainWindow):
         session_type = session_data.get("type", "local")
         self.create_terminal_tab(session_type, session_data)
 
-    def _make_worker(self, session_type, session_data):
+    def _make_worker(self, session_type, session_data, init=None):
         ish = get_use_inshellisense()
         if session_type == "ssh":
-            return SSHWorker(session_data, inshellisense=ish)
+            data = session_data
+            if init:
+                existing = session_data.get("startup_script")
+                combined = f"{existing}\n{init}" if existing else init
+                data = {**session_data, "startup_script": combined}
+            return SSHWorker(data, inshellisense=ish)
         elif session_type == "serial":
             return SerialWorker(
                 session_data.get("com_port"),
@@ -287,10 +297,10 @@ class MainWindow(QMainWindow):
                 session_data.get("stop_bits", 1)
             )
         elif session_type == "local":
-            return LocalPTYWorker(inshellisense=ish)
+            return LocalPTYWorker(inshellisense=ish, startup=init)
         elif session_type == "home":
             # MobaXterm-style local Unix shell (Git Bash/WSL/BusyBox on Windows)
-            return LocalPTYWorker(prefer_unix=True, inshellisense=ish)
+            return LocalPTYWorker(prefer_unix=True, inshellisense=ish, startup=init)
         return None
 
     def _start_worker_for(self, tab, worker):
@@ -355,14 +365,14 @@ class MainWindow(QMainWindow):
         if idx != -1:
             self.tabs.setTabIcon(idx, self._blank_icon)
 
-    def build_terminal(self, session_type, session_data):
+    def build_terminal(self, session_type, session_data, init=None):
         """Create a TerminalTab, start its worker, and apply appearance
         settings. Does not add it to the tab widget (the caller places it)."""
         tab = TerminalTab(session_data.get("name", "Unnamed Session"))
         tab.apply_settings(get_terminal_settings())
         self._wire_terminal(tab, session_type, session_data)
 
-        worker = self._make_worker(session_type, session_data)
+        worker = self._make_worker(session_type, session_data, init=init)
         if worker:
             self._start_worker_for(tab, worker)
 
@@ -410,6 +420,171 @@ class MainWindow(QMainWindow):
 
     def open_home_terminal(self):
         self.create_terminal_tab("home", {"name": "Home", "type": "home"})
+
+    # ---- Layouts (save/restore the open workspace) ----
+    def _session_ref(self, term):
+        """A portable reference to a terminal's session for a saved layout."""
+        data = getattr(term, "session_data", {}) or {}
+        stype = getattr(term, "session_type", data.get("type", "home"))
+        if data.get("id"):
+            return {"id": data["id"], "name": data.get("name", "Session")}
+        # Unsaved (home/local/quick) session — store the minimal spec
+        return {"type": stype, "name": data.get("name", stype.title())}
+
+    def _resolve_ref(self, ref):
+        """Turn a layout session reference back into (session_type, session_data)."""
+        if ref.get("id"):
+            session = find_session(ref["id"])
+            if session:
+                return session.get("type", "ssh"), session
+            return None  # session was deleted
+        stype = ref.get("type", "home")
+        return stype, {"name": ref.get("name", stype.title()), "type": stype}
+
+    def _last_known_dir(self, term):
+        """Best-effort current directory for a terminal (for pre-filling 'cd')."""
+        worker = getattr(term, "worker", None)
+        if worker is None:
+            return ""
+        return self.sftp_browser._latest_cwd.get(id(worker), "")
+
+    def capture_layout(self):
+        """Build a layout structure from the currently open tabs."""
+        tabs = []
+        for i in range(self.tabs.count()):
+            widget = self.tabs.widget(i)
+            terminals = getattr(widget, "terminals", None)
+            if terminals is not None:  # split tab
+                panes = [{"session": self._session_ref(t), "init": ""} for t in terminals]
+                tabs.append({
+                    "kind": "split",
+                    "count": len(terminals),
+                    "orientation": "vertical" if getattr(widget, "root", None) is not None
+                                   and widget.root.orientation() == Qt.Orientation.Vertical
+                                   else "horizontal",
+                    "panes": panes,
+                    "terms": terminals,
+                })
+            elif hasattr(widget, "worker"):
+                tabs.append({
+                    "kind": "single",
+                    "session": self._session_ref(widget),
+                    "init": "",
+                    "terms": [widget],
+                })
+        return tabs
+
+    def show_save_layout_dialog(self):
+        entries = self.capture_layout()
+        # Flatten terminals for per-terminal init fields
+        term_rows = []
+        for entry in entries:
+            for term in entry["terms"]:
+                term_rows.append(term)
+        if not term_rows:
+            QMessageBox.information(self, "Save Layout", "Open some sessions first.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Save Current Layout")
+        form = QFormLayout(dialog)
+
+        name_edit = QLineEdit()
+        name_edit.setPlaceholderText("Layout name")
+        form.addRow("Name:", name_edit)
+
+        init_edits = {}
+        for term in term_rows:
+            edit = QLineEdit()
+            cwd = self._last_known_dir(term)
+            edit.setText(f"cd {cwd}" if cwd else "")
+            edit.setPlaceholderText("e.g. cd /path && conda activate myenv")
+            init_edits[id(term)] = edit
+            form.addRow(f"{getattr(term, 'session_name', 'Terminal')}:", edit)
+
+        def do_save():
+            name = name_edit.text().strip()
+            if not name:
+                QMessageBox.warning(dialog, "Save Layout", "Please enter a name.")
+                return
+            layout = {"tabs": []}
+            for entry in entries:
+                if entry["kind"] == "split":
+                    panes = []
+                    for term, pane in zip(entry["terms"], entry["panes"]):
+                        panes.append({"session": pane["session"],
+                                      "init": init_edits[id(term)].text().strip()})
+                    layout["tabs"].append({"kind": "split", "count": entry["count"],
+                                           "orientation": entry["orientation"], "panes": panes})
+                else:
+                    term = entry["terms"][0]
+                    layout["tabs"].append({"kind": "single", "session": entry["session"],
+                                           "init": init_edits[id(term)].text().strip()})
+            save_layout(name, layout)
+            dialog.accept()
+            QMessageBox.information(self, "Layout Saved",
+                                    f"Layout '{name}' saved. Open it from Sessions -> Open Layout.")
+
+        btn = QPushButton("Save")
+        btn.clicked.connect(do_save)
+        form.addRow(btn)
+        dialog.exec()
+
+    def show_open_layout_dialog(self):
+        layouts = get_layouts()
+        if not layouts:
+            QMessageBox.information(self, "Open Layout", "No saved layouts yet.")
+            return
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Open Layout")
+        form = QFormLayout(dialog)
+
+        combo = QComboBox()
+        combo.addItems(sorted(layouts.keys()))
+        form.addRow("Layout:", combo)
+
+        btn_open = QPushButton("Open")
+        btn_open.clicked.connect(lambda: (self.restore_layout(combo.currentText()), dialog.accept()))
+        btn_delete = QPushButton("Delete")
+        def do_delete():
+            name = combo.currentText()
+            if delete_layout(name):
+                combo.removeItem(combo.currentIndex())
+                if combo.count() == 0:
+                    dialog.accept()
+        btn_delete.clicked.connect(do_delete)
+        form.addRow(btn_open, btn_delete)
+        dialog.exec()
+
+    def restore_layout(self, name):
+        layout = get_layouts().get(name)
+        if not layout:
+            return
+        for entry in layout.get("tabs", []):
+            if entry.get("kind") == "split":
+                container = SplitContainer(
+                    entry.get("count", 2),
+                    Qt.Orientation.Vertical if entry.get("orientation") == "vertical"
+                    else Qt.Orientation.Horizontal)
+                for pane in entry.get("panes", []):
+                    resolved = self._resolve_ref(pane.get("session", {}))
+                    if resolved is None:
+                        continue
+                    stype, sdata = resolved
+                    term = self.build_terminal(stype, sdata, init=pane.get("init") or None)
+                    container.add_terminal(term)
+                if container.terminals:
+                    self.tabs.addTab(container, f"Split x{len(container.terminals)}")
+                    self.tabs.setCurrentWidget(container)
+            else:
+                resolved = self._resolve_ref(entry.get("session", {}))
+                if resolved is None:
+                    continue
+                stype, sdata = resolved
+                tab = self.build_terminal(stype, sdata, init=entry.get("init") or None)
+                self.tabs.addTab(tab, sdata.get("name", "Session"))
+                self.tabs.setCurrentWidget(tab)
 
     def _toggle_inshellisense(self, enabled):
         set_use_inshellisense(enabled)

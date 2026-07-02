@@ -10,7 +10,7 @@ class LocalPTYWorker(QThread):
     error_occurred = pyqtSignal(str)
     disconnected = pyqtSignal(str)
 
-    def __init__(self, prefer_unix=False, inshellisense=False):
+    def __init__(self, prefer_unix=False, inshellisense=False, startup=None):
         super().__init__()
         self._running = True
         self.process = None
@@ -22,6 +22,12 @@ class LocalPTYWorker(QThread):
         self.prefer_unix = prefer_unix
         # Inshellisense (Microsoft 'is'): IDE-style command autocomplete
         self.inshellisense = inshellisense
+        # One-shot command(s) sent after the shell starts (e.g. cd; conda activate)
+        self.startup = startup
+
+    def _run_startup(self):
+        if self.startup:
+            self.send_data(self.startup + "\r")
 
     def _maybe_start_inshellisense(self):
         """If enabled and 'is' is installed, start it in the shell for
@@ -128,6 +134,7 @@ class LocalPTYWorker(QThread):
                             "BusyBox). Falling back to cmd. Install Git for Windows or WSL for "
                             "ls/grep/awk/scp/rsync.\x1b[0m\r\n")
                     self._emit_rsync_status()
+                self._run_startup()
                 self._maybe_start_inshellisense()
                 while self._running:
                     try:
@@ -167,6 +174,7 @@ class LocalPTYWorker(QThread):
                 os.close(slave)
                 if self.prefer_unix:
                     self._emit_rsync_status()
+                self._run_startup()
                 self._maybe_start_inshellisense()
 
                 while self._running:

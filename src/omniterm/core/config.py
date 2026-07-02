@@ -170,6 +170,48 @@ def save_sessions(data):
     with open(target_file, "w") as f:
         json.dump(data, f, indent=2)
 
+def get_layouts():
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                value = json.load(f).get("layouts")
+                if isinstance(value, dict):
+                    return value
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {}
+
+def save_layout(name, layout):
+    config = {}
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    layouts = config.get("layouts") if isinstance(config.get("layouts"), dict) else {}
+    layouts[name] = layout
+    config["layouts"] = layouts
+    with open(GLOBAL_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
+def delete_layout(name):
+    config = {}
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    layouts = config.get("layouts") if isinstance(config.get("layouts"), dict) else {}
+    if name in layouts:
+        del layouts[name]
+        config["layouts"] = layouts
+        with open(GLOBAL_CONFIG_FILE, "w") as f:
+            json.dump(config, f, indent=2)
+        return True
+    return False
+
 def get_use_inshellisense():
     if GLOBAL_CONFIG_FILE.exists():
         try:
