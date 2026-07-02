@@ -25,6 +25,8 @@ class SSHWorker(QThread):
         self.session_data = session_data
         self._running = True
         self.tunnels = []
+        self.term_cols = 80
+        self.term_rows = 24
 
     def run(self):
         try:
@@ -49,8 +51,10 @@ class SSHWorker(QThread):
             # Setup SSH Tunneling (Port Forwarding)
             self.setup_tunnels()
 
-            # Start interactive shell
-            self.channel = self.client.invoke_shell()
+            # Start interactive shell at the terminal's current size so full-screen
+            # apps (top, nvtop, vim, ...) use the whole window.
+            self.channel = self.client.invoke_shell(
+                term='xterm-256color', width=self.term_cols, height=self.term_rows)
 
             # X11 forwarding: run remote GUI apps on the local X server
             if self.session_data.get("x11"):
@@ -199,6 +203,16 @@ class SSHWorker(QThread):
     def send_data(self, data):
         if hasattr(self, 'channel') and self.channel:
             self.channel.send(data)
+
+    def resize(self, cols, rows):
+        self.term_cols = cols
+        self.term_rows = rows
+        chan = getattr(self, 'channel', None)
+        if chan:
+            try:
+                chan.resize_pty(width=cols, height=rows)
+            except Exception:
+                pass
 
     def send_macro(self, commands, delays):
         """Sends a list of commands with specified delays between them."""

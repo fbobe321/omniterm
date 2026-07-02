@@ -51,6 +51,11 @@ class PyBridge(QObject):
         if self.worker and hasattr(self.worker, 'send_data'):
             self.worker.send_data(data)
 
+    @pyqtSlot(int, int)
+    def resize(self, cols, rows):
+        if self.worker and hasattr(self.worker, 'resize'):
+            self.worker.resize(cols, rows)
+
 class TerminalTab(QWidget):
     def __init__(self, session_name, parent=None):
         super().__init__(parent)

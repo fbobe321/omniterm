@@ -67,7 +67,7 @@
         // QWebChannel setup
         new QWebChannel(qt.webChannelTransport, function (channel) {
             window.pybridge = channel.objects.pybridge;
-            
+
             // Listen for data from Python
             pybridge.onDataReceived.connect(function(data) {
                 term.write(data);
@@ -77,6 +77,21 @@
             term.onData(function(data) {
                 pybridge.sendData(data);
             });
+
+            // Report terminal dimensions to Python so the PTY matches the window
+            // (full-screen apps like top/nvtop/vim use the real size).
+            term.onResize(function(size) {
+                if (pybridge.resize) {
+                    pybridge.resize(size.cols, size.rows);
+                }
+            });
+
+            // Fit now that the bridge is ready and report the initial size
+            // explicitly (fit() alone won't fire onResize if dimensions are unchanged).
+            fitAddon.fit();
+            if (pybridge.resize) {
+                pybridge.resize(term.cols, term.rows);
+            }
         });
 
         window.addEventListener('resize', function() {

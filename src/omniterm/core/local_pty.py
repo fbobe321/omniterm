@@ -13,12 +13,14 @@ class LocalPTYWorker(QThread):
         self.process = None
         self.master_fd = None
         self.pty = None
+        self.cols = 80
+        self.rows = 24
 
     def run(self):
         try:
             if os.name == 'nt':
                 from pywinpty import PtyProcess
-                self.pty = PtyProcess.spawn('cmd.exe')
+                self.pty = PtyProcess.spawn('cmd.exe', dimensions=(self.rows, self.cols))
                 while self._running:
                     try:
                         data = self.pty.read(1024)
@@ -35,6 +37,7 @@ class LocalPTYWorker(QThread):
 
                 master, slave = pty.openpty()
                 self.master_fd = master
+                self._set_winsize(self.rows, self.cols)
 
                 pid = os.fork()
                 if pid == 0:
@@ -71,6 +74,29 @@ class LocalPTYWorker(QThread):
                 os.close(self.master_fd)
             except:
                 pass
+
+    def _set_winsize(self, rows, cols):
+        if self.master_fd is None:
+            return
+        try:
+            import fcntl
+            import termios
+            import struct
+            fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ,
+                        struct.pack('HHHH', rows, cols, 0, 0))
+        except Exception:
+            pass
+
+    def resize(self, cols, rows):
+        self.cols = cols
+        self.rows = rows
+        if os.name == 'nt' and self.pty:
+            try:
+                self.pty.setwinsize(rows, cols)
+            except Exception:
+                pass
+        else:
+            self._set_winsize(rows, cols)
 
     def send_data(self, data):
         if os.name == 'nt' and self.pty:
