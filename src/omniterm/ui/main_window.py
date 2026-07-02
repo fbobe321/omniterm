@@ -344,12 +344,15 @@ class MainWindow(QMainWindow):
         index = tab_bar.tabAt(position)
         if index < 0:
             return
+        is_split = getattr(self.tabs.widget(index), "terminals", None) is not None
+
         menu = QMenu()
         rename_action = menu.addAction("Rename...")
         split_menu = menu.addMenu("Split View")
         split1 = split_menu.addAction("1 Pane")
         split2 = split_menu.addAction("2 Panes")
         split4 = split_menu.addAction("4 Panes")
+        unsplit_action = menu.addAction("Unsplit") if is_split else None
         close_action = menu.addAction("Close")
         chosen = menu.exec(tab_bar.mapToGlobal(position))
         if chosen == rename_action:
@@ -360,8 +363,46 @@ class MainWindow(QMainWindow):
             self.show_split_view_dialog(2)
         elif chosen == split4:
             self.show_split_view_dialog(4)
+        elif unsplit_action is not None and chosen == unsplit_action:
+            self.unsplit_tab(index)
         elif chosen == close_action:
             self.close_tab(index)
+
+    def unsplit_tab(self, index):
+        """Split a combined tab back into individual tabs, one per pane."""
+        container = self.tabs.widget(index)
+        terminals = getattr(container, "terminals", None)
+        if terminals is None:
+            return
+
+        new_tabs = []
+        for old_term in list(terminals):
+            worker = getattr(old_term, "worker", None)
+            if worker is not None:
+                try:
+                    worker.data_received.disconnect(old_term.bridge.onDataReceived)
+                except (TypeError, RuntimeError):
+                    pass
+                try:
+                    worker.error_occurred.disconnect(old_term.handle_error)
+                except (TypeError, RuntimeError):
+                    pass
+
+            new_tab = TerminalTab(old_term.session_name)
+            new_tab.apply_settings(get_terminal_settings())
+            if worker is not None:
+                new_tab.set_worker(worker)
+            old_term.worker = None  # keep the transplanted worker alive
+            new_tabs.append(new_tab)
+
+        # Remove the split container (its now-workerless panes are destroyed with it)
+        self.tabs.removeTab(index)
+        container.deleteLater()
+
+        for new_tab in new_tabs:
+            self.tabs.addTab(new_tab, new_tab.session_name)
+        if new_tabs:
+            self.tabs.setCurrentWidget(new_tabs[-1])
 
     def close_tab(self, index):
         widget = self.tabs.widget(index)
