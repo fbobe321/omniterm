@@ -1,6 +1,7 @@
 from PyQt6.QtCore import QThread, pyqtSignal
 import subprocess
 import os
+import shutil
 import time
 
 class LocalPTYWorker(QThread):
@@ -8,7 +9,7 @@ class LocalPTYWorker(QThread):
     error_occurred = pyqtSignal(str)
     disconnected = pyqtSignal(str)
 
-    def __init__(self):
+    def __init__(self, prefer_unix=False):
         super().__init__()
         self._running = True
         self.process = None
@@ -16,12 +17,50 @@ class LocalPTYWorker(QThread):
         self.pty = None
         self.cols = 80
         self.rows = 24
+        # "Home" terminal: prefer a Unix-like shell (Git Bash/WSL/BusyBox on Windows)
+        self.prefer_unix = prefer_unix
+
+    def _windows_command(self):
+        """Pick the best available shell on Windows. When prefer_unix is set,
+        look for a Unix environment (ls/grep/awk/scp/rsync...) before cmd."""
+        if not self.prefer_unix:
+            return 'cmd.exe', 'cmd.exe'
+
+        for path in (r"C:\Program Files\Git\bin\bash.exe",
+                     r"C:\Program Files\Git\usr\bin\bash.exe",
+                     r"C:\Program Files (x86)\Git\bin\bash.exe"):
+            if os.path.exists(path):
+                return f'"{path}" --login -i', "Git Bash"
+
+        bash = shutil.which('bash')
+        if bash:
+            return f'"{bash}" --login -i', "bash"
+
+        wsl = shutil.which('wsl')
+        if wsl:
+            return wsl, "WSL"
+
+        busybox = shutil.which('busybox')
+        if busybox:
+            return f'"{busybox}" sh', "BusyBox"
+
+        return 'cmd.exe', None  # None -> no unix env found
 
     def run(self):
         try:
             if os.name == 'nt':
+                command, backend = self._windows_command()
                 from pywinpty import PtyProcess
-                self.pty = PtyProcess.spawn('cmd.exe', dimensions=(self.rows, self.cols))
+                self.pty = PtyProcess.spawn(command, dimensions=(self.rows, self.cols))
+                if self.prefer_unix:
+                    if backend:
+                        self.data_received.emit(
+                            f"\x1b[36m[OmniTerm Home] Unix environment: {backend}\x1b[0m\r\n")
+                    else:
+                        self.data_received.emit(
+                            "\x1b[33m[OmniTerm Home] No Unix environment found (Git Bash / WSL / "
+                            "BusyBox). Falling back to cmd. Install Git for Windows or WSL for "
+                            "ls/grep/awk/scp/rsync.\x1b[0m\r\n")
                 while self._running:
                     try:
                         data = self.pty.read(1024)
@@ -34,9 +73,11 @@ class LocalPTYWorker(QThread):
                     except Exception:
                         time.sleep(0.01)
             else:
-                # Linux/macOS PTY implementation
+                # Linux/macOS: launch the user's shell
                 import pty
                 import select
+
+                shell = os.environ.get('SHELL') or '/bin/bash'
 
                 master, slave = pty.openpty()
                 self.master_fd = master
@@ -48,7 +89,10 @@ class LocalPTYWorker(QThread):
                     os.dup2(slave, 0)
                     os.dup2(slave, 1)
                     os.dup2(slave, 2)
-                    os.execv('/bin/bash', ['/bin/bash'])
+                    try:
+                        os.execv(shell, [shell])
+                    except Exception:
+                        os._exit(1)
 
                 os.close(slave)
 

@@ -106,6 +106,9 @@ class MainWindow(QMainWindow):
         # Add a simple menu for session management
         self.menu_bar = self.menuBar()
         self.session_menu = self.menu_bar.addMenu("&Sessions")
+        self.home_terminal_action = self.session_menu.addAction("New Home Terminal (Local Unix)")
+        self.home_terminal_action.triggered.connect(self.open_home_terminal)
+        self.session_menu.addSeparator()
         self.add_session_action = self.session_menu.addAction("Add Session")
         self.add_session_action.triggered.connect(self.show_add_session_dialog)
         self.export_sessions_action = self.session_menu.addAction("Export Sessions...")
@@ -285,6 +288,9 @@ class MainWindow(QMainWindow):
             )
         elif session_type == "local":
             return LocalPTYWorker()
+        elif session_type == "home":
+            # MobaXterm-style local Unix shell (Git Bash/WSL/BusyBox on Windows)
+            return LocalPTYWorker(prefer_unix=True)
         return None
 
     def _start_worker_for(self, tab, worker):
@@ -357,6 +363,9 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(tab, session_name)
         self.tabs.setCurrentWidget(tab)
         return tab
+
+    def open_home_terminal(self):
+        self.create_terminal_tab("home", {"name": "Home", "type": "home"})
 
     def _primary_ssh_worker(self, widget):
         """The SSH worker whose files should be shown for `widget` (a tab).
@@ -492,7 +501,11 @@ class MainWindow(QMainWindow):
         # Ctrl+T: New Tab (Local PTY)
         self.shortcut_tab = QShortcut(QKeySequence("Ctrl+T"), self)
         self.shortcut_tab.activated.connect(lambda: self.create_terminal_tab("local", {"name": "Local Terminal"}))
-        
+
+        # Ctrl+H: New Home Terminal (local Unix shell)
+        self.shortcut_home = QShortcut(QKeySequence("Ctrl+H"), self)
+        self.shortcut_home.activated.connect(self.open_home_terminal)
+
         # Ctrl+S: Save Current Session (if applicable)
         self.shortcut_save = QShortcut(QKeySequence("Ctrl+S"), self)
         self.shortcut_save.activated.connect(lambda: QMessageBox.information(self, "Save", "Session settings saved."))
@@ -759,7 +772,7 @@ class MainWindow(QMainWindow):
 
         name_edit = QLineEdit(existing.get("name", ""))
         type_combo = QComboBox()
-        type_combo.addItems(["ssh", "serial", "local"])
+        type_combo.addItems(["ssh", "serial", "local", "home"])
         type_combo.setCurrentText(existing.get("type", "ssh"))
 
         layout.addRow("Name:", name_edit)
