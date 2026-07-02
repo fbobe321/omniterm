@@ -1,7 +1,7 @@
 import os
 from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QToolButton, QInputDialog, QMenu, QCheckBox
-from PyQt6.QtGui import QColor
-from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QColor, QDesktopServices
+from PyQt6.QtCore import Qt, QUrl
 from omniterm.ui.session_dock import SessionDock
 from omniterm.ui.terminal_tab import TerminalTab, SplitContainer
 from omniterm.ui.sftp_browser import SFTPBrowser
@@ -133,6 +133,13 @@ class MainWindow(QMainWindow):
         self.manage_plugins_action.triggered.connect(self.show_plugin_manager_dialog)
         self.shell_integration_action = self.settings_menu.addAction("Shell Integration Guide...")
         self.shell_integration_action.triggered.connect(self.show_shell_integration_dialog)
+
+        # Help menu: support link + version
+        self.help_menu = self.menu_bar.addMenu("&Help")
+        self.github_action = self.help_menu.addAction("GitHub / Support")
+        self.github_action.triggered.connect(self.open_github)
+        self.about_action = self.help_menu.addAction("About OmniTerm")
+        self.about_action.triggered.connect(self.show_about_dialog)
 
     def show_split_view_dialog(self, default_count=2):
         # Candidate tabs = currently open single terminals (not already-split tabs)
@@ -551,6 +558,34 @@ class MainWindow(QMainWindow):
                         term.apply_settings(settings)
             elif hasattr(widget, "apply_settings"):
                 widget.apply_settings(settings)
+
+    GITHUB_URL = "https://github.com/fbobe321/omniterm"
+
+    @staticmethod
+    def app_version():
+        try:
+            from importlib.metadata import version
+            return version("omniterm")
+        except Exception:
+            return "unknown"
+
+    def open_github(self):
+        QDesktopServices.openUrl(QUrl(self.GITHUB_URL))
+
+    def show_about_dialog(self):
+        version = self.app_version()
+        box = QMessageBox(self)
+        box.setWindowTitle("About OmniTerm")
+        box.setTextFormat(Qt.TextFormat.RichText)  # makes the link clickable
+        box.setText(
+            f"<h3>OmniTerm</h3>"
+            f"<p>Version <b>{version}</b></p>"
+            f"<p>A cross-platform terminal: SSH, serial, and local sessions "
+            f"with an integrated SFTP browser.</p>"
+            f"<p>For support, issues, and documentation:<br>"
+            f"<a href='{self.GITHUB_URL}'>{self.GITHUB_URL}</a></p>"
+        )
+        box.exec()
 
     def show_shell_integration_dialog(self):
         QMessageBox.information(self, "Shell Integration",
