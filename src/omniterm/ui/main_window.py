@@ -249,7 +249,9 @@ class MainWindow(QMainWindow):
                     pass
 
             # Fresh terminal, created directly inside the split hierarchy
-            new_tab = TerminalTab(old_tab.session_name)
+            new_tab = TerminalTab(
+                old_tab.session_name,
+                windows_mode=self._needs_windows_mode(getattr(old_tab, "session_type", None)))
             new_tab.apply_settings(get_terminal_settings())
             self._wire_terminal(new_tab, getattr(old_tab, "session_type", None),
                                 getattr(old_tab, "session_data", None))
@@ -367,10 +369,17 @@ class MainWindow(QMainWindow):
         if idx != -1:
             self.tabs.setTabIcon(idx, self._blank_icon)
 
+    @staticmethod
+    def _needs_windows_mode(session_type):
+        # Local/home terminals on Windows are ConPTY-backed and need xterm's
+        # Windows-PTY mode; SSH (remote Linux) does not.
+        return os.name == "nt" and session_type in ("local", "home")
+
     def build_terminal(self, session_type, session_data, init=None):
         """Create a TerminalTab, start its worker, and apply appearance
         settings. Does not add it to the tab widget (the caller places it)."""
-        tab = TerminalTab(session_data.get("name", "Unnamed Session"))
+        tab = TerminalTab(session_data.get("name", "Unnamed Session"),
+                          windows_mode=self._needs_windows_mode(session_type))
         tab.apply_settings(get_terminal_settings())
         self._wire_terminal(tab, session_type, session_data)
 
@@ -762,7 +771,9 @@ class MainWindow(QMainWindow):
                 except (TypeError, RuntimeError, AttributeError):
                     pass
 
-            new_tab = TerminalTab(old_term.session_name)
+            new_tab = TerminalTab(
+                old_term.session_name,
+                windows_mode=self._needs_windows_mode(getattr(old_term, "session_type", None)))
             new_tab.apply_settings(get_terminal_settings())
             self._wire_terminal(new_tab, getattr(old_term, "session_type", None),
                                 getattr(old_term, "session_data", None))
