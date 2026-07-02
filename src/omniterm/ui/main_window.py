@@ -1,6 +1,6 @@
 import os
 from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QInputDialog, QMenu, QCheckBox, QToolBar, QToolButton
-from PyQt6.QtGui import QColor, QDesktopServices, QAction, QIcon
+from PyQt6.QtGui import QColor, QDesktopServices, QAction, QIcon, QPixmap
 from PyQt6.QtCore import Qt, QUrl, QSize, QTimer
 from omniterm.ui.icons import get_icon
 from omniterm.ui.theme import APP_STYLESHEET
@@ -45,11 +45,19 @@ class MainWindow(QMainWindow):
         # Show the active tab's remote files when the selected tab changes
         self.tabs.currentChanged.connect(self.on_tab_changed)
 
-        # Background-activity indicator (blinking dot on inactive tabs)
-        self._activity_tabs = set()
+        # Background-activity indicator (blinking dot on inactive tabs).
+        # A fixed-size icon slot is always reserved (transparent when idle) so
+        # the tab width never changes when the dot blinks on/off.
+        _sz = 12
+        self.tabs.setIconSize(QSize(_sz, _sz))
+        _blank = QPixmap(_sz, _sz)
+        _blank.fill(Qt.GlobalColor.transparent)
+        self._blank_icon = QIcon(_blank)
+        self._dot_icon = QIcon(get_icon("dot").pixmap(_sz, _sz))
+        self._activity = {}      # top-level tab -> blink ticks remaining
         self._blink_on = False
         self._blink_timer = QTimer(self)
-        self._blink_timer.setInterval(550)
+        self._blink_timer.setInterval(500)
         self._blink_timer.timeout.connect(self._blink_activity)
         self._blink_timer.start()
 
@@ -307,6 +315,10 @@ class MainWindow(QMainWindow):
         tab.close_requested.connect(lambda t=tab: self.on_terminal_close_requested(t))
         tab.activity.connect(lambda t=tab: self._on_terminal_activity(t))
 
+    # Blink for a few ticks after the last output, then stop (so an idle tab
+    # doesn't keep blinking forever).
+    ACTIVITY_TICKS = 5
+
     def _on_terminal_activity(self, term):
         top = self._top_level_tab_of(term)
         if top is None:
@@ -314,24 +326,34 @@ class MainWindow(QMainWindow):
         idx = self.tabs.indexOf(top)
         if idx == -1 or idx == self.tabs.currentIndex():
             return  # ignore activity on the tab you're already looking at
-        self._activity_tabs.add(top)
+        self._activity[top] = self.ACTIVITY_TICKS
+
+    def _ensure_tab_icons(self):
+        # Reserve a fixed icon slot on every tab so widths stay constant
+        for i in range(self.tabs.count()):
+            if self.tabs.tabIcon(i).isNull():
+                self.tabs.setTabIcon(i, self._blank_icon)
 
     def _blink_activity(self):
         self._blink_on = not self._blink_on
-        dot = get_icon("dot") if self._blink_on else QIcon()
-        for top in list(self._activity_tabs):
+        for top in list(self._activity):
             idx = self.tabs.indexOf(top)
             if idx == -1:
-                self._activity_tabs.discard(top)
+                del self._activity[top]
                 continue
-            self.tabs.setTabIcon(idx, dot)
+            self._activity[top] -= 1
+            if self._activity[top] <= 0:
+                del self._activity[top]
+                self.tabs.setTabIcon(idx, self._blank_icon)
+            else:
+                self.tabs.setTabIcon(idx, self._dot_icon if self._blink_on else self._blank_icon)
 
     def _clear_activity(self, top):
-        if top in self._activity_tabs:
-            self._activity_tabs.discard(top)
-            idx = self.tabs.indexOf(top)
-            if idx != -1:
-                self.tabs.setTabIcon(idx, QIcon())
+        if top in self._activity:
+            del self._activity[top]
+        idx = self.tabs.indexOf(top)
+        if idx != -1:
+            self.tabs.setTabIcon(idx, self._blank_icon)
 
     def build_terminal(self, session_type, session_data):
         """Create a TerminalTab, start its worker, and apply appearance
@@ -434,6 +456,7 @@ class MainWindow(QMainWindow):
         return None
 
     def on_tab_changed(self, index):
+        self._ensure_tab_icons()  # keep a fixed icon slot on every tab
         widget = self.tabs.widget(index) if index >= 0 else None
         if widget is not None:
             self._clear_activity(widget)  # focusing a tab clears its activity dot
@@ -537,7 +560,7 @@ class MainWindow(QMainWindow):
     def close_tab(self, index):
         widget = self.tabs.widget(index)
         if widget:
-            self._activity_tabs.discard(widget)
+            self._activity.pop(widget, None)
             terminals = getattr(widget, "terminals", None)
             if terminals is not None:
                 for term in terminals:
