@@ -69,6 +69,7 @@ class PyBridge(QObject):
 class TerminalTab(QWidget):
     reconnect_requested = pyqtSignal()
     close_requested = pyqtSignal()
+    activity = pyqtSignal()  # emitted when output arrives (for tab activity dot)
 
     def __init__(self, session_name, parent=None):
         super().__init__(parent)
@@ -140,9 +141,13 @@ class TerminalTab(QWidget):
         self.bridge.worker = worker
         self.disconnect_bar.hide()
         worker.data_received.connect(self.bridge.onDataReceived)
+        worker.data_received.connect(self._on_activity)
         worker.error_occurred.connect(self.handle_error)
         if hasattr(worker, "disconnected"):
             worker.disconnected.connect(self.on_disconnected)
+
+    def _on_activity(self, _data):
+        self.activity.emit()
 
     def handle_error(self, error_msg):
         # Ensure the error is visible in the terminal

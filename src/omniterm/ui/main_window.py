@@ -1,7 +1,7 @@
 import os
 from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QInputDialog, QMenu, QCheckBox, QToolBar, QToolButton
-from PyQt6.QtGui import QColor, QDesktopServices, QAction
-from PyQt6.QtCore import Qt, QUrl, QSize
+from PyQt6.QtGui import QColor, QDesktopServices, QAction, QIcon
+from PyQt6.QtCore import Qt, QUrl, QSize, QTimer
 from omniterm.ui.icons import get_icon
 from omniterm.ui.theme import APP_STYLESHEET
 from omniterm.ui.session_dock import SessionDock
@@ -44,6 +44,14 @@ class MainWindow(QMainWindow):
 
         # Show the active tab's remote files when the selected tab changes
         self.tabs.currentChanged.connect(self.on_tab_changed)
+
+        # Background-activity indicator (blinking dot on inactive tabs)
+        self._activity_tabs = set()
+        self._blink_on = False
+        self._blink_timer = QTimer(self)
+        self._blink_timer.setInterval(550)
+        self._blink_timer.timeout.connect(self._blink_activity)
+        self._blink_timer.start()
 
         # Connect session selection to tab creation
         self.session_dock.tree_view.clicked.connect(self.on_session_selected)
@@ -297,6 +305,33 @@ class MainWindow(QMainWindow):
         tab.session_data = session_data
         tab.reconnect_requested.connect(lambda t=tab: self.on_terminal_reconnect_requested(t))
         tab.close_requested.connect(lambda t=tab: self.on_terminal_close_requested(t))
+        tab.activity.connect(lambda t=tab: self._on_terminal_activity(t))
+
+    def _on_terminal_activity(self, term):
+        top = self._top_level_tab_of(term)
+        if top is None:
+            return
+        idx = self.tabs.indexOf(top)
+        if idx == -1 or idx == self.tabs.currentIndex():
+            return  # ignore activity on the tab you're already looking at
+        self._activity_tabs.add(top)
+
+    def _blink_activity(self):
+        self._blink_on = not self._blink_on
+        dot = get_icon("dot") if self._blink_on else QIcon()
+        for top in list(self._activity_tabs):
+            idx = self.tabs.indexOf(top)
+            if idx == -1:
+                self._activity_tabs.discard(top)
+                continue
+            self.tabs.setTabIcon(idx, dot)
+
+    def _clear_activity(self, top):
+        if top in self._activity_tabs:
+            self._activity_tabs.discard(top)
+            idx = self.tabs.indexOf(top)
+            if idx != -1:
+                self.tabs.setTabIcon(idx, QIcon())
 
     def build_terminal(self, session_type, session_data):
         """Create a TerminalTab, start its worker, and apply appearance
@@ -400,6 +435,8 @@ class MainWindow(QMainWindow):
 
     def on_tab_changed(self, index):
         widget = self.tabs.widget(index) if index >= 0 else None
+        if widget is not None:
+            self._clear_activity(widget)  # focusing a tab clears its activity dot
         self.sftp_browser.show_worker(self._primary_fs_worker(widget))
 
     def _stop_terminal(self, term):
@@ -500,6 +537,7 @@ class MainWindow(QMainWindow):
     def close_tab(self, index):
         widget = self.tabs.widget(index)
         if widget:
+            self._activity_tabs.discard(widget)
             terminals = getattr(widget, "terminals", None)
             if terminals is not None:
                 for term in terminals:
