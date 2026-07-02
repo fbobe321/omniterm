@@ -4,6 +4,7 @@
     <link rel="stylesheet" type="text/css" href="xterm.css">
     <script src="xterm.js"></script>
     <script src="xterm-addon-fit.js"></script>
+    <script src="xterm-addon-canvas.js"></script>
     <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
     <style>
         body, html {
@@ -45,6 +46,15 @@
         var fitAddon = new FitAddon.FitAddon();
         term.loadAddon(fitAddon);
         term.open(document.getElementById('terminal'));
+
+        // Use the canvas renderer instead of the default DOM renderer. The DOM
+        // renderer flickers per-keystroke inside Qt WebEngine; canvas is smooth.
+        try {
+            if (window.CanvasAddon) {
+                term.loadAddon(new CanvasAddon.CanvasAddon());
+            }
+        } catch (e) { /* fall back to the default renderer */ }
+
         fitAddon.fit();
 
         // Expose so the Python side can tweak appearance at runtime.
