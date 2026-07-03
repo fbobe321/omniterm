@@ -212,6 +212,30 @@ def delete_layout(name):
         return True
     return False
 
+def get_shortcuts():
+    """Return the saved {action_id: key_sequence} overrides (may be empty)."""
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                value = json.load(f).get("shortcuts")
+                if isinstance(value, dict):
+                    return value
+        except (json.JSONDecodeError, IOError):
+            pass
+    return {}
+
+def set_shortcuts(mapping):
+    config = {}
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    config["shortcuts"] = dict(mapping)
+    with open(GLOBAL_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
 def get_use_inshellisense():
     if GLOBAL_CONFIG_FILE.exists():
         try:

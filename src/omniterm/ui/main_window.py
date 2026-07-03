@@ -1,7 +1,7 @@
 import os
 import re
-from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QInputDialog, QMenu, QCheckBox, QToolBar, QToolButton
-from PyQt6.QtGui import QColor, QDesktopServices, QAction, QIcon, QPixmap
+from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QInputDialog, QMenu, QCheckBox, QToolBar, QToolButton, QKeySequenceEdit
+from PyQt6.QtGui import QColor, QDesktopServices, QAction, QIcon, QPixmap, QShortcut, QKeySequence
 from PyQt6.QtCore import Qt, QUrl, QSize, QTimer
 from omniterm.ui.icons import get_icon
 from omniterm.ui.theme import APP_STYLESHEET
@@ -105,6 +105,8 @@ class MainWindow(QMainWindow):
         self.inshellisense_action.setCheckable(True)
         self.inshellisense_action.setChecked(get_use_inshellisense())
         self.inshellisense_action.toggled.connect(self._toggle_inshellisense)
+        self.shortcuts_action = self.settings_menu.addAction("Keyboard Shortcuts...")
+        self.shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
         self.open_tools_action = self.settings_menu.addAction("Open Home Tools Folder (rsync, etc.)...")
         self.open_tools_action.triggered.connect(self.open_tools_folder)
         self.set_home_dir_action = self.settings_menu.addAction("Set Persistent Home Directory...")
@@ -811,24 +813,110 @@ class MainWindow(QMainWindow):
             self.tabs.removeTab(index)
             widget.deleteLater()
 
+    # Common tasks -> (id, label, default key sequence, handler method name)
+    SHORTCUT_DEFS = [
+        ("new_session",    "New Session",                 "Ctrl+N",       "show_add_session_dialog"),
+        ("home_terminal",  "New Home Terminal",           "Ctrl+H",       "open_home_terminal"),
+        ("local_terminal", "New Local Terminal",          "Ctrl+T",       "new_local_terminal"),
+        ("next_tab",       "Switch to Next Tab",          "Ctrl+Shift+Z", "next_tab"),
+        ("prev_tab",       "Switch to Previous Tab",      "Ctrl+Shift+A", "prev_tab"),
+        ("close_tab",      "Close Current Tab",           "Ctrl+W",       "close_current_tab"),
+        ("rename_tab",     "Rename Current Tab",          "F2",           "rename_current_tab"),
+        ("split_2h",       "Split: 2 Panes (Horizontal)", "",             "split_2h"),
+        ("split_2v",       "Split: 2 Panes (Vertical)",   "",             "split_2v"),
+        ("split_4",        "Split: 4 Panes",              "",             "split_4"),
+        ("unsplit",        "Unsplit Current Tab",         "",             "unsplit_current_tab"),
+        ("save_layout",    "Save Current Layout",         "Ctrl+Shift+S", "show_save_layout_dialog"),
+        ("open_layout",    "Open Layout",                 "Ctrl+Shift+O", "show_open_layout_dialog"),
+        ("shortcuts",      "Keyboard Shortcuts...",       "Ctrl+K",       "show_shortcuts_dialog"),
+    ]
+
     def setup_shortcuts(self):
-        from PyQt6.QtGui import QShortcut, QKeySequence
-        
-        # Ctrl+N: New Session
-        self.shortcut_new = QShortcut(QKeySequence("Ctrl+N"), self)
-        self.shortcut_new.activated.connect(self.show_add_session_dialog)
-        
-        # Ctrl+T: New Tab (Local PTY)
-        self.shortcut_tab = QShortcut(QKeySequence("Ctrl+T"), self)
-        self.shortcut_tab.activated.connect(lambda: self.create_terminal_tab("local", {"name": "Local Terminal"}))
+        from omniterm.core.config import get_shortcuts
+        # Remove any previously-built shortcuts (for rebuild after editing)
+        for sc in getattr(self, "_shortcuts", []):
+            sc.setParent(None)
+            sc.deleteLater()
+        self._shortcuts = []
 
-        # Ctrl+H: New Home Terminal (local Unix shell)
-        self.shortcut_home = QShortcut(QKeySequence("Ctrl+H"), self)
-        self.shortcut_home.activated.connect(self.open_home_terminal)
+        overrides = get_shortcuts()
+        for sid, _label, default, handler_name in self.SHORTCUT_DEFS:
+            seq = overrides.get(sid, default)
+            if not seq:
+                continue  # unbound
+            handler = getattr(self, handler_name, None)
+            if handler is None:
+                continue
+            sc = QShortcut(QKeySequence(seq), self)
+            sc.activated.connect(handler)
+            self._shortcuts.append(sc)
 
-        # Ctrl+S: Save Current Session (if applicable)
-        self.shortcut_save = QShortcut(QKeySequence("Ctrl+S"), self)
-        self.shortcut_save.activated.connect(lambda: QMessageBox.information(self, "Save", "Session settings saved."))
+    # ---- Shortcut action handlers ----
+    def new_local_terminal(self):
+        self.create_terminal_tab("local", {"name": "Local Terminal"})
+
+    def next_tab(self):
+        n = self.tabs.count()
+        if n > 1:
+            self.tabs.setCurrentIndex((self.tabs.currentIndex() + 1) % n)
+
+    def prev_tab(self):
+        n = self.tabs.count()
+        if n > 1:
+            self.tabs.setCurrentIndex((self.tabs.currentIndex() - 1) % n)
+
+    def close_current_tab(self):
+        idx = self.tabs.currentIndex()
+        if idx >= 0:
+            self.close_tab(idx)
+
+    def rename_current_tab(self):
+        idx = self.tabs.currentIndex()
+        if idx >= 0:
+            self.rename_tab(idx)
+
+    def split_2h(self):
+        self.show_split_view_dialog("2h")
+
+    def split_2v(self):
+        self.show_split_view_dialog("2v")
+
+    def split_4(self):
+        self.show_split_view_dialog("4")
+
+    def show_shortcuts_dialog(self):
+        from omniterm.core.config import get_shortcuts, set_shortcuts
+        overrides = get_shortcuts()
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Keyboard Shortcuts")
+        form = QFormLayout(dialog)
+
+        editors = {}
+        for sid, label, default, _handler in self.SHORTCUT_DEFS:
+            editor = QKeySequenceEdit(QKeySequence(overrides.get(sid, default)))
+            editors[sid] = editor
+            form.addRow(label, editor)
+
+        def save():
+            mapping = {}
+            for sid, _label, default, _h in self.SHORTCUT_DEFS:
+                mapping[sid] = editors[sid].keySequence().toString()
+            set_shortcuts(mapping)
+            self.setup_shortcuts()  # rebuild live
+            dialog.accept()
+
+        def reset():
+            for sid, _label, default, _h in self.SHORTCUT_DEFS:
+                editors[sid].setKeySequence(QKeySequence(default))
+
+        btn_save = QPushButton("Save")
+        btn_save.clicked.connect(save)
+        btn_reset = QPushButton("Reset to Defaults")
+        btn_reset.clicked.connect(reset)
+        form.addRow(btn_reset, btn_save)
+
+        dialog.exec()
 
     def show_sftp_error(self, msg):
         # Route SFTP errors to the current terminal tab if possible, or a status bar
