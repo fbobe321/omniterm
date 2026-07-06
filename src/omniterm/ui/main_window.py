@@ -107,6 +107,11 @@ class MainWindow(QMainWindow):
         self.inshellisense_action.toggled.connect(self._toggle_inshellisense)
         self.shortcuts_action = self.settings_menu.addAction("Keyboard Shortcuts...")
         self.shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
+        from omniterm.core.config import get_debug_logging
+        self.debug_log_action = self.settings_menu.addAction("Debug: Log Terminal I/O")
+        self.debug_log_action.setCheckable(True)
+        self.debug_log_action.setChecked(get_debug_logging())
+        self.debug_log_action.toggled.connect(self._toggle_debug_logging)
         self.open_tools_action = self.settings_menu.addAction("Open Home Tools Folder (rsync, etc.)...")
         self.open_tools_action.triggered.connect(self.open_tools_folder)
         self.set_home_dir_action = self.settings_menu.addAction("Set Persistent Home Directory...")
@@ -662,6 +667,17 @@ class MainWindow(QMainWindow):
                 "  npm install -g @microsoft/inshellisense\n\n"
                 "For SSH sessions it must be installed on the remote host. "
                 "Existing tabs are unaffected — open a new terminal to use it.")
+
+    def _toggle_debug_logging(self, enabled):
+        from omniterm.core.config import set_debug_logging, DEBUG_LOG_FILE
+        set_debug_logging(enabled)
+        if enabled:
+            QMessageBox.information(
+                self, "Debug Logging",
+                "Terminal I/O logging is ON.\n\n"
+                "Reproduce the issue in a NEW terminal, then send me ~15-20 lines "
+                "of the log around a fast-typed word. Turn this OFF when done.\n\n"
+                f"Log file:\n{DEBUG_LOG_FILE}")
 
     def open_tools_folder(self):
         """Open <home>/bin, which is on the Home terminal's PATH. Drop rsync.exe

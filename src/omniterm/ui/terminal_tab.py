@@ -5,6 +5,7 @@ from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, QUrl, Qt
 import os
 import json
 from omniterm.core.serial_client import SerialWorker
+from omniterm.core.config import log_terminal_io
 
 
 class SplitContainer(QWidget):
@@ -49,6 +50,7 @@ class PyBridge(QObject):
 
     @pyqtSlot(str)
     def sendData(self, data):
+        log_terminal_io("TX", data)
         if self.worker and hasattr(self.worker, 'send_data'):
             self.worker.send_data(data)
 
@@ -144,6 +146,7 @@ class TerminalTab(QWidget):
         self.bridge.worker = worker
         self.disconnect_bar.hide()
         worker.data_received.connect(self.bridge.onDataReceived)
+        worker.data_received.connect(lambda d: log_terminal_io("RX", d))
         worker.data_received.connect(self._on_activity)
         worker.error_occurred.connect(self.handle_error)
         if hasattr(worker, "disconnected"):

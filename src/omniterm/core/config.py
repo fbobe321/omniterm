@@ -212,6 +212,48 @@ def delete_layout(name):
         return True
     return False
 
+import time as _time
+DEBUG_LOG_FILE = HOME_DIR / "omniterm_debug.log"
+_debug_enabled_cache = None
+
+def get_debug_logging():
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                value = json.load(f).get("debug_logging")
+                if isinstance(value, bool):
+                    return value
+        except (json.JSONDecodeError, IOError):
+            pass
+    return False
+
+def set_debug_logging(value):
+    global _debug_enabled_cache
+    _debug_enabled_cache = bool(value)
+    config = {}
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    config["debug_logging"] = bool(value)
+    with open(GLOBAL_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
+def log_terminal_io(direction, data):
+    """Append raw terminal I/O (repr) with a timestamp when debug logging is on."""
+    global _debug_enabled_cache
+    if _debug_enabled_cache is None:
+        _debug_enabled_cache = get_debug_logging()
+    if not _debug_enabled_cache:
+        return
+    try:
+        with open(DEBUG_LOG_FILE, "a") as f:
+            f.write(f"{_time.monotonic():.4f} {direction} {data!r}\n")
+    except Exception:
+        pass
+
 def get_shortcuts():
     """Return the saved {action_id: key_sequence} overrides (may be empty)."""
     if GLOBAL_CONFIG_FILE.exists():
