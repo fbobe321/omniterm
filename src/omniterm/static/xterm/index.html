@@ -105,28 +105,12 @@
         new QWebChannel(qt.webChannelTransport, function (channel) {
             window.pybridge = channel.objects.pybridge;
 
-            // Listen for data from Python. Coalesce bytes that arrive close
-            // together (within ~5ms) into a single term.write so a line redraw
-            // (\r + reprint) is written and rendered as one atomic unit - never
-            // an intermediate frame (which showed as the cursor jumping backward
-            // then forward while typing fast). Discrete keystroke echoes still
-            // flush in ~5ms (imperceptible); a 40ms cap bounds latency on streams.
-            var _wbuf = "";
-            var _wtimer = null;
-            var _wstart = 0;
-            function _wflush() {
-                _wtimer = null;
-                if (_wbuf) { var d = _wbuf; _wbuf = ""; term.write(d); }
-            }
+            // Write incoming data immediately. The terminal has no local echo,
+            // so a typed character only appears after it round-trips to the
+            // shell and back; any added buffering here increases that latency
+            // and makes the cursor lag behind fast typing. Keep it minimal.
             pybridge.onDataReceived.connect(function(data) {
-                if (!_wbuf) { _wstart = performance.now(); }
-                _wbuf += data;
-                if (_wtimer) { clearTimeout(_wtimer); _wtimer = null; }
-                if (performance.now() - _wstart >= 40) {
-                    _wflush();
-                } else {
-                    _wtimer = setTimeout(_wflush, 5);
-                }
+                term.write(data);
             });
 
             // Send keystrokes to Python

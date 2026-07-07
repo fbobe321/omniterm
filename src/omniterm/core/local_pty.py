@@ -178,15 +178,12 @@ class LocalPTYWorker(QThread):
                 self._maybe_start_inshellisense()
 
                 while self._running:
+                    # select wakes as soon as data is available (low latency).
                     r, w, e = select.select([self.master_fd], [], [], 0.1)
                     if r:
-                        # Coalesce a burst into one write so a line redraw renders
-                        # atomically. Wait a few ms for more data after each read
-                        # (to catch a redraw arriving in pieces), capped so latency
-                        # stays imperceptible.
+                        # Drain what's available now and emit immediately.
                         chunk = b""
                         eof = False
-                        deadline = time.monotonic() + 0.03
                         while True:
                             try:
                                 part = os.read(self.master_fd, 65536)
@@ -197,16 +194,13 @@ class LocalPTYWorker(QThread):
                                 eof = True
                                 break
                             chunk += part
-                            if len(chunk) >= 262144 or time.monotonic() >= deadline:
-                                break
-                            more, _, _ = select.select([self.master_fd], [], [], 0.008)
-                            if not more:
+                            more, _, _ = select.select([self.master_fd], [], [], 0)
+                            if not more or len(chunk) >= 262144:
                                 break
                         if chunk:
                             self.data_received.emit(chunk.decode('utf-8', errors='replace'))
                         if eof:
                             break
-                    time.sleep(0.01)
 
                 try:
                     os.close(self.master_fd)

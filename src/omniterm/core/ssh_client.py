@@ -93,26 +93,16 @@ class SSHWorker(QThread):
             self._last_cwd = None
             while self._running:
                 if self.channel.recv_ready():
-                    # Coalesce a burst of output into one write so a line redraw
-                    # (\r + reprint) renders atomically. Wait a few ms for more
-                    # data after each read to catch a redraw that arrives in
-                    # pieces, capped so latency stays imperceptible.
+                    # Drain whatever is available right now and emit immediately
+                    # (no waiting) to keep echo latency as low as possible.
                     chunk = b""
                     eof = False
-                    deadline = time.monotonic() + 0.03
-                    while True:
-                        if self.channel.recv_ready():
-                            part = self.channel.recv(32768)
-                            if not part:
-                                eof = True
-                                break
-                            chunk += part
-                            if len(chunk) >= 131072 or time.monotonic() >= deadline:
-                                break
-                        else:
-                            time.sleep(0.008)  # brief idle-gap wait for more
-                            if not self.channel.recv_ready():
-                                break
+                    while self.channel.recv_ready() and len(chunk) < 131072:
+                        part = self.channel.recv(32768)
+                        if not part:
+                            eof = True
+                            break
+                        chunk += part
                     if chunk:
                         data = chunk.decode('utf-8', errors='replace')
                         self.data_received.emit(data)
@@ -121,7 +111,7 @@ class SSHWorker(QThread):
                         break
                 elif self.channel.closed or self.channel.exit_status_ready():
                     break
-                time.sleep(0.01)
+                time.sleep(0.002)
 
             try:
                 self.channel.close()
