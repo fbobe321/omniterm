@@ -30,16 +30,22 @@ class LocalPTYWorker(QThread):
             self.send_data(self.startup + "\r")
 
     def _maybe_start_inshellisense(self):
-        """If enabled and 'is' is installed, start it in the shell for
-        autocomplete; otherwise show a one-time hint."""
+        """If enabled, launch Inshellisense ('is') in the shell for autocomplete.
+        The check runs INSIDE the shell (not against OmniTerm's PATH) so it works
+        when 'is' is on the shell's PATH but not the launcher process's PATH -
+        which is the common case on Windows (npm global bin)."""
         if not self.inshellisense:
             return
-        if shutil.which("is"):
-            self.send_data("is\r")
+        hint = "install: npm i -g @microsoft/inshellisense (if already installed, run: is reinit)"
+        if os.name == "nt" and not self.prefer_unix:
+            # cmd.exe
+            self.send_data(
+                f"where is >nul 2>nul && is || echo [OmniTerm] Inshellisense not found: {hint}\r")
         else:
-            self.data_received.emit(
-                "\x1b[33m[OmniTerm] Inshellisense enabled but 'is' was not found. "
-                "Install it: npm install -g @microsoft/inshellisense\x1b[0m\r\n")
+            # bash / zsh (Home terminal / WSL / Linux / macOS)
+            self.send_data(
+                f'command -v is >/dev/null 2>&1 && is || '
+                f'echo "[OmniTerm] Inshellisense not found: {hint}"\r')
 
     def _tools_dir(self):
         """OmniTerm's own bin dir, added to the Home terminal PATH so users can

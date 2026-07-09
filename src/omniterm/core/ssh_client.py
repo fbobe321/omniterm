@@ -87,7 +87,10 @@ class SSHWorker(QThread):
             # Inshellisense (command autocomplete) on the remote, if enabled.
             # Requires 'is' to be installed on the remote host.
             if self.inshellisense:
-                self.channel.send("command -v is >/dev/null 2>&1 && is\n")
+                self.channel.send(
+                    'command -v is >/dev/null 2>&1 && is || '
+                    'echo "[OmniTerm] Inshellisense not found on remote: '
+                    'npm install -g @microsoft/inshellisense"\n')
 
             self._osc_buffer = ""
             self._last_cwd = None
