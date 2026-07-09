@@ -3,7 +3,7 @@ import re
 from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QInputDialog, QMenu, QCheckBox, QToolBar, QToolButton, QKeySequenceEdit
 from PyQt6.QtGui import QColor, QDesktopServices, QAction, QIcon, QPixmap, QShortcut, QKeySequence
 from PyQt6.QtCore import Qt, QUrl, QSize, QTimer
-from omniterm.ui.icons import get_icon
+from omniterm.ui.icons import get_icon, app_icon
 from omniterm.ui.theme import APP_STYLESHEET
 from omniterm.ui.session_dock import SessionDock
 from omniterm.ui.terminal_tab import TerminalTab, SplitContainer
@@ -17,6 +17,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("OmniTerm")
+        self.setWindowIcon(app_icon())
         self.resize(1200, 800)
 
         # Modern dark theme

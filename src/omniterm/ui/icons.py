@@ -26,6 +26,13 @@ def get_icon(name):
     return _cache[name]
 
 
+def app_icon():
+    """The OmniTerm program/window icon."""
+    if "__app__" not in _cache:
+        _cache["__app__"] = QIcon(os.path.join(_ICON_DIR, "omniterm.png"))
+    return _cache["__app__"]
+
+
 def session_icon(session_type):
     return get_icon({
         "ssh": "server",
