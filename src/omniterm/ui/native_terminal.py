@@ -6,7 +6,7 @@ input latency).
 """
 import re
 import pyte
-from PyQt6.QtWidgets import QWidget, QApplication
+from PyQt6.QtWidgets import QWidget, QApplication, QMenu
 from PyQt6.QtGui import QPainter, QFont, QFontMetricsF, QColor, QGuiApplication
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF, QTimer
 
@@ -295,6 +295,8 @@ class NativeTerminal(QWidget):
             self._sel_anchor = self._cell_at(event.position())
             self._sel_head = self._sel_anchor
             self.update()
+        elif event.button() == Qt.MouseButton.MiddleButton:
+            self._paste()  # X11/PuTTY-style middle-click paste
         self.setFocus()
 
     def mouseMoveEvent(self, event):
@@ -349,6 +351,24 @@ class NativeTerminal(QWidget):
             if cb is not None:
                 cb.setText(text)
 
+    def _paste(self):
+        cb = QGuiApplication.clipboard()
+        if cb is not None and cb.text():
+            if self._scroll != 0:
+                self._scroll = 0
+                self.update()
+            self.send_input.emit(cb.text())
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        copy_act = menu.addAction("Copy")
+        copy_act.setEnabled(self._selection_span() is not None)
+        copy_act.triggered.connect(self._copy_selection)
+        paste_act = menu.addAction("Paste")
+        paste_act.setEnabled(bool(QGuiApplication.clipboard().text()))
+        paste_act.triggered.connect(self._paste)
+        menu.exec(event.globalPos())
+
     # ---- scrollback ----
     def wheelEvent(self, event):
         if not hasattr(self._screen, "history"):
@@ -385,16 +405,22 @@ class NativeTerminal(QWidget):
         key = event.key()
         mods = event.modifiers()
         ctrl = bool(mods & Qt.KeyboardModifier.ControlModifier)
+        shift = bool(mods & Qt.KeyboardModifier.ShiftModifier)
 
-        # Ctrl+C copies when there is a selection; otherwise sends SIGINT (^C)
-        if ctrl and key == Qt.Key.Key_C and self._selection_span():
+        # Terminal-standard copy/paste (Ctrl+C stays SIGINT).
+        if ctrl and shift and key == Qt.Key.Key_C:
             self._copy_selection()
             return
-        if ctrl and key == Qt.Key.Key_V:
-            cb = QGuiApplication.clipboard()
-            if cb is not None:
-                self.send_input.emit(cb.text())
-            self._scroll = 0
+        if (ctrl and shift and key == Qt.Key.Key_V) or \
+           (shift and key == Qt.Key.Key_Insert):
+            self._paste()
+            return
+        # Ctrl+C copies when there is a selection; otherwise sends SIGINT (^C)
+        if ctrl and not shift and key == Qt.Key.Key_C and self._selection_span():
+            self._copy_selection()
+            return
+        if ctrl and not shift and key == Qt.Key.Key_V:
+            self._paste()
             return
 
         seq = self._SPECIAL.get(key)
