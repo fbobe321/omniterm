@@ -11,7 +11,7 @@ from omniterm.ui.sftp_browser import SFTPBrowser
 from omniterm.core.ssh_client import SSHWorker
 from omniterm.core.serial_client import SerialWorker
 from omniterm.core.local_pty import LocalPTYWorker
-from omniterm.core.config import HOME_DIR, set_home_dir, init_cipher, set_shared_sessions_file, get_terminal_settings, set_terminal_settings, export_sessions, import_sessions, get_use_inshellisense, set_use_inshellisense, get_layouts, save_layout, delete_layout, find_session, get_renderer, set_renderer, get_disable_gpu, set_disable_gpu
+from omniterm.core.config import HOME_DIR, set_home_dir, init_cipher, set_shared_sessions_file, get_terminal_settings, set_terminal_settings, export_sessions, import_sessions, get_use_inshellisense, set_use_inshellisense, get_layouts, save_layout, delete_layout, find_session
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -108,29 +108,6 @@ class MainWindow(QMainWindow):
         self.inshellisense_action.toggled.connect(self._toggle_inshellisense)
         self.shortcuts_action = self.settings_menu.addAction("Keyboard Shortcuts...")
         self.shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
-        # Terminal renderer (DOM is most stable; WebGL/canvas faster but can blank)
-        from PyQt6.QtGui import QActionGroup
-        self.renderer_menu = self.settings_menu.addMenu("Terminal Renderer")
-        self._renderer_group = QActionGroup(self)
-        current_renderer = get_renderer()
-        for key, label in (("dom", "DOM (most stable, recommended)"),
-                           ("canvas", "Canvas (faster)"),
-                           ("webgl", "WebGL (fastest, may blank on htop/btop)")):
-            act = self.renderer_menu.addAction(label)
-            act.setCheckable(True)
-            act.setChecked(current_renderer == key)
-            act.triggered.connect(lambda _checked, k=key: self._set_renderer(k))
-            self._renderer_group.addAction(act)
-        self.disable_gpu_action = self.settings_menu.addAction("Disable GPU Acceleration (fixes htop/btop blanking)")
-        self.disable_gpu_action.setCheckable(True)
-        self.disable_gpu_action.setChecked(get_disable_gpu())
-        self.disable_gpu_action.toggled.connect(self._toggle_disable_gpu)
-        from omniterm.core.config import get_native_terminal, set_native_terminal
-        self._set_native_terminal = set_native_terminal
-        self.native_term_action = self.settings_menu.addAction("Native Terminal (fast, recommended)")
-        self.native_term_action.setCheckable(True)
-        self.native_term_action.setChecked(get_native_terminal())
-        self.native_term_action.toggled.connect(self._toggle_native_terminal)
         from omniterm.core.config import get_debug_logging
         self.debug_log_action = self.settings_menu.addAction("Debug: Log Terminal I/O")
         self.debug_log_action.setCheckable(True)
@@ -270,8 +247,7 @@ class MainWindow(QMainWindow):
             # Fresh terminal, created directly inside the split hierarchy
             new_tab = TerminalTab(
                 old_tab.session_name,
-                windows_mode=self._needs_windows_mode(getattr(old_tab, "session_type", None)),
-                renderer=get_renderer())
+                windows_mode=self._needs_windows_mode(getattr(old_tab, "session_type", None)))
             new_tab.apply_settings(get_terminal_settings())
             self._wire_terminal(new_tab, getattr(old_tab, "session_type", None),
                                 getattr(old_tab, "session_data", None))
@@ -399,8 +375,7 @@ class MainWindow(QMainWindow):
         """Create a TerminalTab, start its worker, and apply appearance
         settings. Does not add it to the tab widget (the caller places it)."""
         tab = TerminalTab(session_data.get("name", "Unnamed Session"),
-                          windows_mode=self._needs_windows_mode(session_type),
-                          renderer=get_renderer())
+                          windows_mode=self._needs_windows_mode(session_type))
         tab.apply_settings(get_terminal_settings())
         self._wire_terminal(tab, session_type, session_data)
 
@@ -682,31 +657,6 @@ class MainWindow(QMainWindow):
                 "For SSH sessions it must be installed on the remote host. "
                 "Existing tabs are unaffected — open a new terminal to use it.")
 
-    def _toggle_native_terminal(self, enabled):
-        self._set_native_terminal(enabled)
-        QMessageBox.information(
-            self, "Terminal Engine",
-            ("Native terminal ENABLED (pyte + Qt rendering)."
-             if enabled else "Web terminal ENABLED (xterm.js).") +
-            "\n\nApplies to newly opened terminals.")
-
-    def _toggle_disable_gpu(self, enabled):
-        set_disable_gpu(enabled)
-        QMessageBox.information(
-            self, "GPU Acceleration",
-            ("GPU acceleration DISABLED (software rendering).\n\n"
-             if enabled else "GPU acceleration ENABLED.\n\n") +
-            "Restart OmniTerm for this to take effect.\n\n"
-            "If htop/btop still blank the screen, keep this ON and set "
-            "Terminal Renderer to DOM.")
-
-    def _set_renderer(self, key):
-        set_renderer(key)
-        QMessageBox.information(
-            self, "Terminal Renderer",
-            f"Renderer set to '{key}'. It applies to newly opened terminals.\n\n"
-            "If full-screen apps (htop/btop) blank out, use DOM.")
-
     def _toggle_debug_logging(self, enabled):
         from omniterm.core.config import set_debug_logging, DEBUG_LOG_FILE
         set_debug_logging(enabled)
@@ -825,8 +775,7 @@ class MainWindow(QMainWindow):
 
             new_tab = TerminalTab(
                 old_term.session_name,
-                windows_mode=self._needs_windows_mode(getattr(old_term, "session_type", None)),
-                renderer=get_renderer())
+                windows_mode=self._needs_windows_mode(getattr(old_term, "session_type", None)))
             new_tab.apply_settings(get_terminal_settings())
             self._wire_terminal(new_tab, getattr(old_term, "session_type", None),
                                 getattr(old_term, "session_data", None))

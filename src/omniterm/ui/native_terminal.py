@@ -207,27 +207,40 @@ class NativeTerminal(QWidget):
         row_end = min(self._rows, int(r.bottom() // self._ch) + 1)
         base_font = self._font
 
+        span = self._selection_span()
         for row in range(row_start, row_end):
             line = lines[row]
             y = row * self._ch
+            # selected column range for this row (folded into the cell bg so
+            # text renders on top and stays readable)
+            sel_cs = sel_ce = -1
+            if span:
+                (sr0, sc0), (sr1, sc1) = span
+                if sr0 <= row <= sr1:
+                    sel_cs = sc0 if row == sr0 else 0
+                    sel_ce = sc1 if row == sr1 else self._cols
             col = 0
             while col < self._cols:
                 start_col = col
                 first = line[col] if col in line else _BLANK
+                sel0 = sel_cs <= col < sel_ce
                 style = (first.fg, first.bg, first.bold, first.italics,
-                         first.underscore, first.reverse)
+                         first.underscore, first.reverse, sel0)
                 run = []
                 while col < self._cols:
                     c = line[col] if col in line else _BLANK
-                    if (c.fg, c.bg, c.bold, c.italics, c.underscore, c.reverse) != style:
+                    sel = sel_cs <= col < sel_ce
+                    if (c.fg, c.bg, c.bold, c.italics, c.underscore, c.reverse, sel) != style:
                         break
                     run.append(c.data if c.data else " ")
                     col += 1
-                fg, bg, bold, italics, underscore, reverse = style
+                fg, bg, bold, italics, underscore, reverse, selected = style
                 fgc = self._color(fg, self._fg, bold)
                 bgc = self._color(bg, self._bg)
                 if reverse:
                     fgc, bgc = bgc, fgc
+                if selected:
+                    bgc = self._sel_color
                 x = start_col * self._cw
                 width = (col - start_col) * self._cw
                 if bgc.rgb() != self._bg.rgb():
@@ -245,7 +258,6 @@ class NativeTerminal(QWidget):
                     p.setPen(fgc)
                     p.drawText(QPointF(x, y + self._ascent), text)
 
-        self._paint_selection(p)
         self._paint_cursor(p)
 
     def _paint_cursor(self, p):
@@ -263,17 +275,6 @@ class NativeTerminal(QWidget):
             p.setPen(self._bg)
             p.setFont(self._font)
             p.drawText(QPointF(cx * self._cw, cy * self._ch + self._ascent), ch.data)
-
-    def _paint_selection(self, p):
-        span = self._selection_span()
-        if not span:
-            return
-        (r0, c0), (r1, c1) = span
-        for row in range(r0, r1 + 1):
-            cs = c0 if row == r0 else 0
-            ce = c1 if row == r1 else self._cols
-            p.fillRect(QRectF(cs * self._cw, row * self._ch,
-                              (ce - cs) * self._cw, self._ch), self._sel_color)
 
     def _selection_span(self):
         if self._sel_anchor is None or self._sel_head is None:

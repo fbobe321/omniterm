@@ -1,8 +1,7 @@
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QLabel, QPushButton
-from PyQt6.QtCore import QObject, pyqtSlot, pyqtSignal, Qt
-import os
+from PyQt6.QtCore import pyqtSignal, Qt
 from omniterm.core.serial_client import SerialWorker
-from omniterm.core.config import log_terminal_io, get_native_terminal
+from omniterm.core.config import log_terminal_io
 from omniterm.ui.native_terminal import NativeTerminal
 
 
@@ -40,46 +39,16 @@ class SplitContainer(QWidget):
             self.terminals.append(widget)
 
 
-class PyBridge(QObject):
-    """Python side of the QWebChannel (web-terminal fallback only)."""
-    onDataReceived = pyqtSignal(str)
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.worker = None
-
-    @pyqtSlot(str)
-    def sendData(self, data):
-        log_terminal_io("TX", data)
-        if self.worker and hasattr(self.worker, 'send_data'):
-            self.worker.send_data(data)
-
-    @pyqtSlot(int, int)
-    def resize(self, cols, rows):
-        if self.worker and hasattr(self.worker, 'resize'):
-            self.worker.resize(cols, rows)
-
-    @pyqtSlot(str)
-    def copyToClipboard(self, text):
-        if not text:
-            return
-        from PyQt6.QtWidgets import QApplication
-        clipboard = QApplication.clipboard()
-        if clipboard is not None:
-            clipboard.setText(text)
-
-
 class TerminalTab(QWidget):
     reconnect_requested = pyqtSignal()
     close_requested = pyqtSignal()
     activity = pyqtSignal()  # emitted when output arrives (for tab activity dot)
 
+    # windows_mode / renderer are accepted for call-site compatibility but the
+    # native terminal doesn't need them.
     def __init__(self, session_name, parent=None, windows_mode=False, renderer="dom"):
         super().__init__(parent)
         self.session_name = session_name
-        self._windows_mode = windows_mode
-        self._renderer = renderer
-        self._native = get_native_terminal()
         self.worker = None
 
         self.layout = QVBoxLayout(self)
@@ -103,94 +72,39 @@ class TerminalTab(QWidget):
         self.disconnect_bar.hide()
         self.layout.addWidget(self.disconnect_bar)
 
-        if self._native:
-            self._init_native()
-        else:
-            self._init_web()
-
-    # ---- native backend ----
-    def _init_native(self):
         self.terminal = NativeTerminal()
-        self.terminal.send_input.connect(self._native_send)
-        self.terminal.resized.connect(self._native_resize)
+        self.terminal.send_input.connect(self._on_send)
+        self.terminal.resized.connect(self._on_resize)
         self.layout.addWidget(self.terminal)
 
-    def _native_send(self, text):
+    def _on_send(self, text):
         log_terminal_io("TX", text)
         if self.worker and hasattr(self.worker, "send_data"):
             self.worker.send_data(text)
 
-    def _native_resize(self, cols, rows):
+    def _on_resize(self, cols, rows):
         if self.worker and hasattr(self.worker, "resize"):
             self.worker.resize(cols, rows)
 
-    def _native_output(self, data):
+    def _on_output(self, data):
         log_terminal_io("RX", data)
         self.terminal.feed(data)
         self.activity.emit()
 
-    # ---- web backend (fallback) ----
-    def _init_web(self):
-        from PyQt6.QtWebEngineWidgets import QWebEngineView
-        from PyQt6.QtWebChannel import QWebChannel
-        from PyQt6.QtCore import QUrl
-        self.web_view = QWebEngineView()
-        self.layout.addWidget(self.web_view)
-        self.channel = QWebChannel()
-        self.bridge = PyBridge()
-        self.channel.registerObject("pybridge", self.bridge)
-        self.web_view.page().setWebChannel(self.channel)
-        self._settings = None
-        self._page_loaded = False
-        self.web_view.loadFinished.connect(self._on_load_finished)
-        file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "xterm", "index.html"))
-        self._index_url = QUrl.fromLocalFile(file_path)
-        params = [f"renderer={self._renderer}"]
-        if self._windows_mode:
-            params.append("win=1")
-        self._index_url.setQuery("&".join(params))
-        self.web_view.setUrl(self._index_url)
-
-    def _on_load_finished(self, ok):
-        self._page_loaded = bool(ok)
-        if self._page_loaded and self._settings is not None:
-            self._run_apply(self._settings)
-
-    def _run_apply(self, settings):
-        import json
-        payload = json.dumps(settings)
-        self.web_view.page().runJavaScript(
-            f"if (window.applyTerminalSettings) {{ window.applyTerminalSettings({payload}); }}")
-
-    def _web_output(self, data):
-        log_terminal_io("RX", data)
-        self.bridge.onDataReceived.emit(data)
-        self.activity.emit()
-
-    # ---- common interface ----
     def apply_settings(self, settings):
-        if self._native:
-            self.terminal.apply_appearance(
-                settings.get("fontFamily"), settings.get("fontSize"),
-                settings.get("foreground"), settings.get("background"))
-        else:
-            self._settings = settings
-            if self._page_loaded:
-                self._run_apply(settings)
+        self.terminal.apply_appearance(
+            settings.get("fontFamily"), settings.get("fontSize"),
+            settings.get("foreground"), settings.get("background"))
 
     def set_worker(self, worker):
         self.worker = worker
         self.disconnect_bar.hide()
-        if self._native:
-            worker.data_received.connect(self._native_output)
-            if hasattr(worker, "resize"):
-                worker.resize(self.terminal._cols, self.terminal._rows)
-        else:
-            self.bridge.worker = worker
-            worker.data_received.connect(self._web_output)
+        worker.data_received.connect(self._on_output)
         worker.error_occurred.connect(self.handle_error)
         if hasattr(worker, "disconnected"):
             worker.disconnected.connect(self.on_disconnected)
+        if hasattr(worker, "resize"):
+            worker.resize(self.terminal._cols, self.terminal._rows)
 
     def detach_worker(self):
         """Disconnect the current worker from this view (for split/unsplit
@@ -198,8 +112,8 @@ class TerminalTab(QWidget):
         w = self.worker
         if w is None:
             return
-        out = self._native_output if self._native else self._web_output
-        for sig, slot in ((w.data_received, out), (w.error_occurred, self.handle_error)):
+        for sig, slot in ((w.data_received, self._on_output),
+                          (w.error_occurred, self.handle_error)):
             try:
                 sig.disconnect(slot)
             except (TypeError, RuntimeError):
@@ -210,10 +124,7 @@ class TerminalTab(QWidget):
             pass
 
     def _write(self, text):
-        if self._native:
-            self.terminal.feed(text)
-        else:
-            self.bridge.onDataReceived.emit(text)
+        self.terminal.feed(text)
 
     def handle_error(self, error_msg):
         self._write(f"\r\n\x1b[31m[ERROR]: {error_msg}\x1b[0m\r\n")
