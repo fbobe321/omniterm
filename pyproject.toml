@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omniterm"
-version = "0.1.67"
+version = "0.1.68"
 description = "A cross-platform terminal: SSH, serial, and local sessions with an integrated SFTP browser."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -35,6 +35,9 @@ dependencies = [
     "cryptography",
     "pywinpty; sys_platform == 'win32'",
 ]
+
+[project.optional-dependencies]
+test = ["pytest"]
 
 [project.urls]
 Homepage = "https://github.com/fbobe321/omniterm"

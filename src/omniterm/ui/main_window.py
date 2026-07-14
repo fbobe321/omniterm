@@ -671,9 +671,9 @@ class MainWindow(QMainWindow):
                 self, "Command Prediction",
                 "Shadow command prediction is ON.\n\n"
                 "As you type, OmniTerm suggests your likely next command (from "
-                "your own command history) as dim inline text. Press Right-arrow "
-                "at the end of the line to accept it, or Ctrl+Right to accept one "
-                "word.\n\n"
+                "your own command history) as dim inline text.\n\n"
+                "Accept it with Ctrl+F (or End, or Right-arrow); accept just one "
+                "word with Ctrl+Right. Tab still does normal shell completion.\n\n"
                 "Password prompts and commands containing secrets are never "
                 "suggested or stored.")
 

@@ -611,8 +611,14 @@ class NativeTerminal(QWidget):
             return
         buffer, at_end = cur
         # Privacy: printable keys forwarded but nothing echoed => masked input
-        # (a password prompt). Suspend suggestions AND history recording.
-        if self._typed_count >= 2 and len(buffer) == 0:
+        # (a password prompt). This must be robust to network echo latency on
+        # SSH, where keystrokes outrun their echo: a real password prompt NEVER
+        # echoes, so as soon as any character appears we know it isn't masked.
+        # Latch masked only while the buffer is still empty after several keys;
+        # clear it the moment an echo arrives.
+        if len(buffer) > 0:
+            self._masked = False
+        elif self._typed_count >= 3:
             self._masked = True
         if self._masked:
             self._set_shadow("")
@@ -764,15 +770,20 @@ class NativeTerminal(QWidget):
             self._sel_head = None
             self.update()
 
-        # Accept the shadow suggestion with Right-arrow at end of line (Ctrl+Right
-        # accepts one word). The shadow is only ever set with the cursor at the
-        # buffer end, so its presence implies we're at line end.
-        if self._shadow and not shift and key == Qt.Key.Key_Right:
-            if ctrl:
+        # Accept the suggestion without leaving the home row. Tab is left ALONE
+        # for shell filename/path completion (essential CLI function). Accept the
+        # whole suggestion with Ctrl-F (fish convention; F is a home-row key),
+        # End, or Right-arrow; accept one word with Ctrl-Right. The shadow is
+        # only ever set with the cursor at line end, so these keys are no-ops
+        # there otherwise and safe to repurpose.
+        if self._shadow and not shift:
+            if ctrl and key == Qt.Key.Key_Right:
                 self._accept_shadow_word()
-            else:
+                return
+            if (not ctrl and key in (Qt.Key.Key_Right, Qt.Key.Key_End)) or \
+               (ctrl and key == Qt.Key.Key_F):
                 self._accept_shadow()
-            return
+                return
 
         seq = self._SPECIAL.get(key)
         if seq is None and key in self._CURSOR:
