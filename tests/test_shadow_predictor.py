@@ -200,6 +200,38 @@ def test_tab_is_left_for_shell_completion(qapp, tmp_path):
     assert w.sent == ["\t"]                        # Tab passes through to shell
 
 
+def test_paste_normalizes_newlines(qapp):
+    """A multi-line paste sends carriage returns (what Enter sends), not \\n."""
+    from omniterm.ui.native_terminal import NativeTerminal
+    from PyQt6.QtGui import QGuiApplication
+    t = NativeTerminal()
+    sent = []
+    t.send_input.connect(lambda s: sent.append(s))
+    QGuiApplication.clipboard().setText("line1\nline2\r\nline3")
+    t._paste()
+    assert sent == ["line1\rline2\rline3"]
+
+
+def test_paste_is_bracketed_when_app_enables_it(qapp):
+    """When the app enables bracketed paste (vim insert, bash/readline), the
+    paste is wrapped in ESC[200~ / ESC[201~ so vim skips autoindent — this is
+    the fix for large pastes 'staircasing'. When disabled, paste is raw."""
+    from omniterm.ui.native_terminal import NativeTerminal
+    from PyQt6.QtGui import QGuiApplication
+    t = NativeTerminal()
+    sent = []
+    t.send_input.connect(lambda s: sent.append(s))
+    t.feed("\x1b[?2004h")                       # app turns bracketed paste ON
+    QGuiApplication.clipboard().setText("def f():\n    return 1\n")
+    t._paste()
+    assert sent == ["\x1b[200~def f():\r    return 1\r\x1b[201~"]
+    t.feed("\x1b[?2004l")                       # app turns it OFF
+    sent.clear()
+    QGuiApplication.clipboard().setText("x\ny")
+    t._paste()
+    assert sent == ["x\ry"]
+
+
 def test_tab_reaches_shell_through_event_system(qapp):
     """Regression: Qt must not steal Tab for focus traversal. Sent through the
     REAL event() path (not keyPressEvent directly), Tab must keep focus on the

@@ -441,13 +441,23 @@ class NativeTerminal(QWidget):
         self._copy_selection()  # copy-on-select, matching mouse behaviour
         self.update()
 
+    _BRACKETED_PASTE = 2004 << 5  # pyte encodes private mode 2004 as 2004<<5
+
     def _paste(self):
         cb = QGuiApplication.clipboard()
-        if cb is not None and cb.text():
-            if self._scroll != 0:
-                self._scroll = 0
-                self.update()
-            self.send_input.emit(cb.text())
+        if cb is None or not cb.text():
+            return
+        if self._scroll != 0:
+            self._scroll = 0
+            self.update()
+        # Newlines in a paste are carriage returns (what Enter sends), not \n.
+        text = cb.text().replace("\r\n", "\r").replace("\n", "\r")
+        # If the app enabled bracketed paste (vim, bash/readline, ...), wrap the
+        # text so it's treated as a paste — vim then skips autoindent, fixing the
+        # "staircase" indentation on large pastes.
+        if self._BRACKETED_PASTE in self._screen.mode:
+            text = "\x1b[200~" + text + "\x1b[201~"
+        self.send_input.emit(text)
 
     def contextMenuEvent(self, event):
         menu = QMenu(self)
