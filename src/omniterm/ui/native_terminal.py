@@ -359,13 +359,18 @@ class NativeTerminal(QWidget):
         self.update()
 
     # ---- keyboard ----
+    # Cursor keys depend on DECCKM (application cursor keys): SS3 (ESC O x) when
+    # set, CSI (ESC [ x) when reset. inshellisense/readline/vi enable DECCKM and
+    # rely on this for history/navigation.
+    _DECCKM = 1 << 5  # pyte encodes private mode 1 as 1<<5
+    _CURSOR = {
+        Qt.Key.Key_Up: "A", Qt.Key.Key_Down: "B", Qt.Key.Key_Right: "C",
+        Qt.Key.Key_Left: "D", Qt.Key.Key_Home: "H", Qt.Key.Key_End: "F",
+    }
     _SPECIAL = {
         Qt.Key.Key_Return: "\r", Qt.Key.Key_Enter: "\r",
         Qt.Key.Key_Backspace: "\x7f", Qt.Key.Key_Tab: "\t",
         Qt.Key.Key_Escape: "\x1b",
-        Qt.Key.Key_Up: "\x1b[A", Qt.Key.Key_Down: "\x1b[B",
-        Qt.Key.Key_Right: "\x1b[C", Qt.Key.Key_Left: "\x1b[D",
-        Qt.Key.Key_Home: "\x1b[H", Qt.Key.Key_End: "\x1b[F",
         Qt.Key.Key_PageUp: "\x1b[5~", Qt.Key.Key_PageDown: "\x1b[6~",
         Qt.Key.Key_Insert: "\x1b[2~", Qt.Key.Key_Delete: "\x1b[3~",
         Qt.Key.Key_F1: "\x1bOP", Qt.Key.Key_F2: "\x1bOQ",
@@ -393,6 +398,9 @@ class NativeTerminal(QWidget):
             return
 
         seq = self._SPECIAL.get(key)
+        if seq is None and key in self._CURSOR:
+            prefix = "\x1bO" if self._DECCKM in self._screen.mode else "\x1b["
+            seq = prefix + self._CURSOR[key]
         if seq is None:
             if ctrl and Qt.Key.Key_A <= key <= Qt.Key.Key_Z:
                 seq = chr(key - Qt.Key.Key_A + 1)  # ^A..^Z
