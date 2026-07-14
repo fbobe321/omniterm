@@ -212,6 +212,31 @@ def delete_layout(name):
         return True
     return False
 
+def get_native_terminal():
+    """True = native Qt terminal (pyte + QPainter); False = web terminal
+    (xterm.js in QtWebEngine). Native is the default (smoother, no GPU blanking)."""
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                value = json.load(f).get("native_terminal")
+                if isinstance(value, bool):
+                    return value
+        except (json.JSONDecodeError, IOError):
+            pass
+    return True
+
+def set_native_terminal(value):
+    config = {}
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    config["native_terminal"] = bool(value)
+    with open(GLOBAL_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
 def get_disable_gpu():
     """When True, run QtWebEngine with software rendering (no GPU). Slower but
     immune to GPU context-loss blanking (htop/btop) on flaky/virtual GPUs."""

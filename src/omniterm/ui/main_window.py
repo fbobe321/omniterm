@@ -125,6 +125,12 @@ class MainWindow(QMainWindow):
         self.disable_gpu_action.setCheckable(True)
         self.disable_gpu_action.setChecked(get_disable_gpu())
         self.disable_gpu_action.toggled.connect(self._toggle_disable_gpu)
+        from omniterm.core.config import get_native_terminal, set_native_terminal
+        self._set_native_terminal = set_native_terminal
+        self.native_term_action = self.settings_menu.addAction("Native Terminal (fast, recommended)")
+        self.native_term_action.setCheckable(True)
+        self.native_term_action.setChecked(get_native_terminal())
+        self.native_term_action.toggled.connect(self._toggle_native_terminal)
         from omniterm.core.config import get_debug_logging
         self.debug_log_action = self.settings_menu.addAction("Debug: Log Terminal I/O")
         self.debug_log_action.setCheckable(True)
@@ -259,19 +265,7 @@ class MainWindow(QMainWindow):
             worker = getattr(old_tab, "worker", None)
 
             # Detach the worker from the old tab's view
-            if worker is not None:
-                try:
-                    worker.data_received.disconnect(old_tab.bridge.onDataReceived)
-                except (TypeError, RuntimeError):
-                    pass
-                try:
-                    worker.error_occurred.disconnect(old_tab.handle_error)
-                except (TypeError, RuntimeError):
-                    pass
-                try:
-                    worker.disconnected.disconnect(old_tab.on_disconnected)
-                except (TypeError, RuntimeError, AttributeError):
-                    pass
+            old_tab.detach_worker()
 
             # Fresh terminal, created directly inside the split hierarchy
             new_tab = TerminalTab(
@@ -688,6 +682,14 @@ class MainWindow(QMainWindow):
                 "For SSH sessions it must be installed on the remote host. "
                 "Existing tabs are unaffected — open a new terminal to use it.")
 
+    def _toggle_native_terminal(self, enabled):
+        self._set_native_terminal(enabled)
+        QMessageBox.information(
+            self, "Terminal Engine",
+            ("Native terminal ENABLED (pyte + Qt rendering)."
+             if enabled else "Web terminal ENABLED (xterm.js).") +
+            "\n\nApplies to newly opened terminals.")
+
     def _toggle_disable_gpu(self, enabled):
         set_disable_gpu(enabled)
         QMessageBox.information(
@@ -819,19 +821,7 @@ class MainWindow(QMainWindow):
         new_tabs = []
         for old_term in list(terminals):
             worker = getattr(old_term, "worker", None)
-            if worker is not None:
-                try:
-                    worker.data_received.disconnect(old_term.bridge.onDataReceived)
-                except (TypeError, RuntimeError):
-                    pass
-                try:
-                    worker.error_occurred.disconnect(old_term.handle_error)
-                except (TypeError, RuntimeError):
-                    pass
-                try:
-                    worker.disconnected.disconnect(old_term.on_disconnected)
-                except (TypeError, RuntimeError, AttributeError):
-                    pass
+            old_term.detach_worker()
 
             new_tab = TerminalTab(
                 old_term.session_name,
@@ -975,8 +965,8 @@ class MainWindow(QMainWindow):
     def show_sftp_error(self, msg):
         # Route SFTP errors to the current terminal tab if possible, or a status bar
         current_tab = self.tabs.currentWidget()
-        if current_tab and hasattr(current_tab, 'bridge'):
-            current_tab.bridge.onDataReceived.emit(f"\r\n\x1b[31m[SFTP ERROR]: {msg}\x1b[0m\r\n")
+        if current_tab and hasattr(current_tab, '_write'):
+            current_tab._write(f"\r\n\x1b[31m[SFTP ERROR]: {msg}\x1b[0m\r\n")
         else:
             print(f"SFTP Error: {msg}")
 
