@@ -288,20 +288,25 @@ class NativeTerminal(QWidget):
         self._paint_cursor(p)
 
     def _paint_shadow(self, p):
-        """Draw the predicted suffix dim, starting at the cursor cell."""
+        """Draw the predicted suffix dim, starting at the cursor cell and
+        wrapping onto following rows like real input would."""
         if not self._shadow or self._scroll != 0:
             return
         cx = self._screen.cursor.x
         cy = self._screen.cursor.y
         if cy >= self._rows or cx >= self._cols:
             return
-        avail = self._cols - cx
-        if avail <= 0:
-            return
-        text = self._shadow[:avail]
         p.setFont(self._font)
         p.setPen(self._shadow_color)
-        p.drawText(QPointF(cx * self._cw, cy * self._ch + self._ascent), text)
+        text = self._shadow
+        col, row, i = cx, cy, 0
+        while i < len(text) and row < self._rows:
+            avail = self._cols - col
+            chunk = text[i:i + avail]
+            p.drawText(QPointF(col * self._cw, row * self._ch + self._ascent), chunk)
+            i += len(chunk)
+            row += 1
+            col = 0
 
     def _paint_cursor(self, p):
         if self._scroll != 0 or self._screen.cursor.hidden or not self._cursor_on:
@@ -565,19 +570,31 @@ class NativeTerminal(QWidget):
         ``buffer`` is exactly the text typed left of the cursor (so a trailing
         space is preserved — it's a real prefix); ``at_end`` is True when nothing
         but padding sits to the right of the cursor. Uses the prompt-end column
-        captured at the first keystroke — no symbol guessing. Phase 1 tracks a
-        single (unwrapped) row; a wrapped/scrolled line yields None (suppressed).
+        captured at the first keystroke — no symbol guessing.
+
+        Handles a command that wraps onto continuation rows below the prompt row
+        (Phase 2): each wrapped row is full width, so we splice the prompt row
+        from the prompt column, whole intermediate rows, and the cursor row up
+        to the cursor. A cursor above the prompt row (scroll/clear) yields None.
         """
         if not self._line_active or self._in_alt:
             return None
         cy = self._screen.cursor.y
         cx = self._screen.cursor.x
-        if cy != self._prompt_row or cx < self._prompt_col:
+        if cy < self._prompt_row:
             return None
-        text = self._line_text(cy)
-        buffer = text[self._prompt_col:cx]
-        at_end = text[cx:].rstrip() == ""
-        return buffer, at_end
+        if cy == self._prompt_row:
+            if cx < self._prompt_col:
+                return None
+            text = self._line_text(cy)
+            return text[self._prompt_col:cx], text[cx:].rstrip() == ""
+        # Wrapped over multiple rows.
+        parts = [self._line_text(self._prompt_row)[self._prompt_col:]]
+        for r in range(self._prompt_row + 1, cy):
+            parts.append(self._line_text(r))
+        last = self._line_text(cy)
+        parts.append(last[:cx])
+        return "".join(parts), last[cx:].rstrip() == ""
 
     def _set_shadow(self, s):
         if s != self._shadow:
@@ -629,6 +646,23 @@ class NativeTerminal(QWidget):
         self._shadow = ""
         self._typed_count += len(text)
         self.send_input.emit(text)   # echoes back; next feed re-predicts
+        self.update()
+
+    def _accept_shadow_word(self):
+        """Accept one word of the suggestion (Ctrl+Right): leading spaces plus
+        the next run of non-spaces. The remainder re-predicts on the echo."""
+        s = self._shadow
+        if not s:
+            return
+        i = 0
+        while i < len(s) and s[i] == " ":
+            i += 1
+        while i < len(s) and s[i] != " ":
+            i += 1
+        chunk = s[:i]
+        self._shadow = s[i:]
+        self._typed_count += len(chunk)
+        self.send_input.emit(chunk)
         self.update()
 
     def _record_command(self):
@@ -730,11 +764,14 @@ class NativeTerminal(QWidget):
             self._sel_head = None
             self.update()
 
-        # Accept the shadow suggestion with Right-arrow at end of line. The
-        # shadow is only ever set with the cursor at the buffer end, so its
-        # presence implies we're at line end.
-        if self._shadow and not shift and not ctrl and key == Qt.Key.Key_Right:
-            self._accept_shadow()
+        # Accept the shadow suggestion with Right-arrow at end of line (Ctrl+Right
+        # accepts one word). The shadow is only ever set with the cursor at the
+        # buffer end, so its presence implies we're at line end.
+        if self._shadow and not shift and key == Qt.Key.Key_Right:
+            if ctrl:
+                self._accept_shadow_word()
+            else:
+                self._accept_shadow()
             return
 
         seq = self._SPECIAL.get(key)

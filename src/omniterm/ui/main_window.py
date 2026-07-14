@@ -106,6 +106,11 @@ class MainWindow(QMainWindow):
         self.inshellisense_action.setCheckable(True)
         self.inshellisense_action.setChecked(get_use_inshellisense())
         self.inshellisense_action.toggled.connect(self._toggle_inshellisense)
+        from omniterm.core.config import get_shadow_predictor as _get_shadow_predictor
+        self.shadow_predict_action = self.settings_menu.addAction("Command Prediction (Shadow Text)")
+        self.shadow_predict_action.setCheckable(True)
+        self.shadow_predict_action.setChecked(_get_shadow_predictor().get("enabled", False))
+        self.shadow_predict_action.toggled.connect(self._toggle_shadow_predictor)
         self.shortcuts_action = self.settings_menu.addAction("Keyboard Shortcuts...")
         self.shortcuts_action.triggered.connect(self.show_shortcuts_dialog)
         from omniterm.core.config import get_debug_logging
@@ -656,6 +661,21 @@ class MainWindow(QMainWindow):
                 "  npm install -g @microsoft/inshellisense\n\n"
                 "For SSH sessions it must be installed on the remote host. "
                 "Existing tabs are unaffected — open a new terminal to use it.")
+
+    def _toggle_shadow_predictor(self, enabled):
+        from omniterm.core.config import set_shadow_predictor
+        set_shadow_predictor({"enabled": enabled})
+        self.apply_terminal_settings_to_open_tabs()  # live-reload in open tabs
+        if enabled:
+            QMessageBox.information(
+                self, "Command Prediction",
+                "Shadow command prediction is ON.\n\n"
+                "As you type, OmniTerm suggests your likely next command (from "
+                "your own command history) as dim inline text. Press Right-arrow "
+                "at the end of the line to accept it, or Ctrl+Right to accept one "
+                "word.\n\n"
+                "Password prompts and commands containing secrets are never "
+                "suggested or stored.")
 
     def _toggle_debug_logging(self, enabled):
         from omniterm.core.config import set_debug_logging, DEBUG_LOG_FILE
