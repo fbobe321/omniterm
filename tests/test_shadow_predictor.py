@@ -200,6 +200,29 @@ def test_tab_is_left_for_shell_completion(qapp, tmp_path):
     assert w.sent == ["\t"]                        # Tab passes through to shell
 
 
+def test_scroll_stays_pinned_when_output_arrives(qapp):
+    """Scrolling up to read history must not be yanked back to the bottom by new
+    output — the view stays pinned to the same lines as content flows into
+    scrollback."""
+    from omniterm.ui.native_terminal import NativeTerminal
+
+    def top_line(t):
+        line = t._visible_lines()[0]
+        return "".join((line[i].data if i in line and line[i].data else " ")
+                       for i in range(t._cols)).rstrip()
+
+    t = NativeTerminal()
+    t.resize(640, 384)
+    for i in range(100):
+        t.feed(f"line{i:03d}\r\n")
+    t._scroll = 15
+    pinned = top_line(t)
+    for i in range(100, 120):          # 20 more lines while scrolled up
+        t.feed(f"line{i:03d}\r\n")
+    assert top_line(t) == pinned       # same line still shown (not snapped down)
+    assert t._scroll == 35             # offset advanced by the 20 new lines
+
+
 def test_paste_normalizes_newlines(qapp):
     """A multi-line paste sends carriage returns (what Enter sends), not \\n."""
     from omniterm.ui.native_terminal import NativeTerminal

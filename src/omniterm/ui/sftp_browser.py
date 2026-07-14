@@ -1,6 +1,6 @@
-from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView, QWidget, QVBoxLayout, QCheckBox, QLineEdit, QCompleter
-from PyQt6.QtGui import QStandardItemModel, QStandardItem, QAction, QDrag
-from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl, QSize, QStringListModel
+from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView, QWidget, QVBoxLayout, QCheckBox, QLineEdit, QCompleter, QProgressDialog, QMessageBox
+from PyQt6.QtGui import QStandardItemModel, QStandardItem, QAction, QDrag, QDesktopServices
+from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl, QSize, QStringListModel, QFileSystemWatcher, QTimer
 import os
 import stat
 import posixpath
@@ -8,6 +8,7 @@ import tempfile
 import time
 import shutil
 from omniterm.core.config import get_group_folders_first, set_group_folders_first
+from omniterm.core.transfer import TransferWorker
 from omniterm.ui.icons import get_icon, file_icon
 
 
@@ -47,11 +48,35 @@ class LocalFSAdapter:
             raise e
         return entries
 
-    def get(self, remote, local):
-        shutil.copy2(remote, local)
+    def get(self, remote, local, callback=None):
+        self._copy(remote, local, callback)
 
-    def put(self, local, remote):
-        shutil.copy2(local, remote)
+    def put(self, local, remote, callback=None):
+        self._copy(local, remote, callback)
+
+    @staticmethod
+    def _copy(src, dst, callback=None):
+        size = os.path.getsize(src)
+        done = 0
+        with open(src, "rb") as fi, open(dst, "wb") as fo:
+            while True:
+                chunk = fi.read(262144)
+                if not chunk:
+                    break
+                fo.write(chunk)
+                done += len(chunk)
+                if callback:
+                    callback(done, size)
+        try:
+            shutil.copystat(src, dst)
+        except OSError:
+            pass
+        if callback:
+            callback(size, size)
+
+    def stat(self, path):
+        st = os.stat(path)
+        return _LocalAttr(os.path.basename(path), st.st_mode, st.st_size, st.st_mtime)
 
     def mkdir(self, path):
         os.mkdir(path)
@@ -235,6 +260,14 @@ class SFTPBrowser(QDockWidget):
         self._active_state = None
         self._latest_cwd = {}    # id(worker) -> last reported shell cwd
         self._bootstrapped = set()  # workers we've configured for OSC 7
+
+        # Background transfers + double-click-to-edit sync.
+        self._transfer = None            # active TransferWorker
+        self._progress = None            # active QProgressDialog
+        self._watcher = QFileSystemWatcher(self)
+        self._watcher.fileChanged.connect(self._on_edited_file_changed)
+        self._edits = {}                 # local temp path -> {remote, mtime}
+        self._prompting = set()          # local paths with an open overwrite prompt
 
     def _ensure_connected(self):
         if self.sftp is None:
@@ -483,9 +516,12 @@ class SFTPBrowser(QDockWidget):
         if item.data(ISDIR_ROLE):
             # Navigate into the directory (or up, for "..")
             self.list_directory(path)
+        elif isinstance(self.sftp, LocalFSAdapter):
+            # Local file: open it directly with the OS default application.
+            QDesktopServices.openUrl(QUrl.fromLocalFile(path))
         else:
-            # Double-clicking a file downloads it
-            self.download_path(path)
+            # Remote file: download to a temp copy, open it, and sync back on save.
+            self.open_for_edit(path)
 
     def selected_file_paths(self):
         """Remote paths of every selected entry that is a regular file."""
@@ -520,6 +556,15 @@ class SFTPBrowser(QDockWidget):
             download_action.triggered.connect(lambda: self.download_files(selected_files))
             menu.addAction(download_action)
         elif len(selected_files) == 1:
+            if isinstance(self.sftp, LocalFSAdapter):
+                open_action = QAction("Open", self)
+                open_action.triggered.connect(
+                    lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(selected_files[0])))
+                menu.addAction(open_action)
+            else:
+                edit_action = QAction("Edit (open && sync on save)", self)
+                edit_action.triggered.connect(lambda: self.open_for_edit(selected_files[0]))
+                menu.addAction(edit_action)
             download_action = QAction("Download...", self)
             download_action.triggered.connect(lambda: self.download_path(selected_files[0]))
             menu.addAction(download_action)
@@ -547,37 +592,89 @@ class SFTPBrowser(QDockWidget):
         set_group_folders_first(self.group_folders_first)
         self.list_directory(self.current_path)
 
+    # ---- progress-tracked transfers ----
+    def _transport_or_none(self):
+        """paramiko Transport for a remote SFTP client, or None for local."""
+        if isinstance(self.sftp, LocalFSAdapter):
+            return None
+        try:
+            return self.sftp.get_channel().get_transport()
+        except Exception:
+            return None
+
+    def _remote_size(self, remote_path):
+        try:
+            return int(self.sftp.stat(remote_path).st_size)
+        except Exception:
+            return 0
+
+    def _run_transfer(self, jobs, title, on_success=None):
+        """Run get/put jobs in a worker thread behind a modal progress dialog."""
+        if not jobs:
+            return
+        if self._transfer is not None:
+            self.error_occurred.emit("A file transfer is already in progress.")
+            return
+        transport = self._transport_or_none()
+        local_adapter = self.sftp if transport is None else None
+        worker = TransferWorker(jobs, transport=transport, local_adapter=local_adapter)
+
+        dlg = QProgressDialog(title, "Cancel", 0, 100, self)
+        dlg.setWindowTitle("File Transfer")
+        dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+
+        def on_progress(done, total, name):
+            if total > 0:
+                dlg.setLabelText(f"{title}\n{name}\n"
+                                 f"{self._format_size(done)} / {self._format_size(total)}")
+                dlg.setValue(int(done * 100 / total))
+            else:
+                dlg.setLabelText(f"{title}\n{name}")
+
+        def on_finished(ok, errors):
+            dlg.close()
+            self._transfer = None
+            self._progress = None
+            real_errors = [e for e in errors if e != "Cancelled"]
+            if real_errors:
+                self.error_occurred.emit("; ".join(real_errors[:3]))
+            elif "Cancelled" not in errors and on_success:
+                on_success()
+
+        worker.progress.connect(on_progress)
+        worker.finished_all.connect(on_finished)
+        dlg.canceled.connect(worker.cancel)
+        self._transfer = worker
+        self._progress = dlg
+        worker.start()
+        dlg.show()
+
     def download_files(self, remote_paths):
         """Download several files at once into a chosen local directory."""
-        if not self._ensure_connected():
-            return
-        if not remote_paths:
+        if not self._ensure_connected() or not remote_paths:
             return
         target_dir = QFileDialog.getExistingDirectory(self, "Select Download Folder")
         if not target_dir:
             return
-        errors = 0
-        for remote_path in remote_paths:
-            local_path = os.path.join(target_dir, posixpath.basename(remote_path))
-            try:
-                self.sftp.get(remote_path, local_path)
-            except Exception as e:
-                errors += 1
-                self.error_occurred.emit(f"Download Error ({posixpath.basename(remote_path)}): {e}")
-        if errors == 0:
-            self.error_occurred.emit(f"Downloaded {len(remote_paths)} file(s) to {target_dir}")
+        jobs = [{"kind": "download", "src": rp,
+                 "dst": os.path.join(target_dir, posixpath.basename(rp)),
+                 "size": self._remote_size(rp), "name": posixpath.basename(rp)}
+                for rp in remote_paths]
+        self._run_transfer(jobs, f"Downloading {len(jobs)} file(s)…")
 
     def download_path(self, remote_path):
-        if not self._ensure_connected():
-            return
-        if not remote_path:
+        if not self._ensure_connected() or not remote_path:
             return
         local_path, _ = QFileDialog.getSaveFileName(self, "Save File", os.path.basename(remote_path))
-        if local_path:
-            try:
-                self.sftp.get(remote_path, local_path)
-            except Exception as e:
-                self.error_occurred.emit(f"Download Error: {e}")
+        if not local_path:
+            return
+        name = posixpath.basename(remote_path)
+        job = {"kind": "download", "src": remote_path, "dst": local_path,
+               "size": self._remote_size(remote_path), "name": name}
+        self._run_transfer([job], f"Downloading {name}…")
 
     def upload_to_current(self):
         if not self._ensure_connected():
@@ -588,18 +685,25 @@ class SFTPBrowser(QDockWidget):
 
     def upload_local_paths(self, local_paths, remote_dir):
         """Upload one or more local files/folders into remote_dir, recursing into
-        directories. Refreshes the view if the upload landed in the current dir."""
+        directories. Remote dirs are created up front; files transfer with a
+        progress bar. Refreshes the view if the upload landed in the current dir."""
         if not self._ensure_connected():
             return
-        for local_path in local_paths:
-            try:
-                self._upload_recursive(local_path, remote_dir)
-            except Exception as e:
-                self.error_occurred.emit(f"Upload Error: {e}")
-        if remote_dir == self.current_path:
-            self.refresh()
+        jobs = []
+        try:
+            for local_path in local_paths:
+                self._collect_upload_jobs(local_path, remote_dir, jobs)
+        except Exception as e:
+            self.error_occurred.emit(f"Upload Error: {e}")
+            return
+        if not jobs:
+            return
+        should_refresh = (remote_dir == self.current_path)
+        self._run_transfer(
+            jobs, f"Uploading {len(jobs)} file(s)…",
+            on_success=(self.refresh if should_refresh else None))
 
-    def _upload_recursive(self, local_path, remote_dir):
+    def _collect_upload_jobs(self, local_path, remote_dir, jobs):
         name = os.path.basename(local_path.rstrip("/\\")) or local_path
         remote_path = posixpath.join(remote_dir, name)
         if os.path.isdir(local_path):
@@ -608,6 +712,86 @@ class SFTPBrowser(QDockWidget):
             except Exception:
                 pass  # directory may already exist
             for entry in sorted(os.listdir(local_path)):
-                self._upload_recursive(os.path.join(local_path, entry), remote_path)
+                self._collect_upload_jobs(os.path.join(local_path, entry), remote_path, jobs)
         else:
-            self.sftp.put(local_path, remote_path)
+            jobs.append({"kind": "upload", "src": local_path, "dst": remote_path,
+                         "size": os.path.getsize(local_path) if os.path.exists(local_path) else 0,
+                         "name": name})
+
+    # ---- double-click to edit: download, open, sync back on save ----
+    def open_for_edit(self, remote_path):
+        if not self._ensure_connected() or not remote_path:
+            return
+        name = posixpath.basename(remote_path)
+        editdir = os.path.join(tempfile.gettempdir(), "omniterm_edit")
+        try:
+            os.makedirs(editdir, exist_ok=True)
+        except OSError as e:
+            self.error_occurred.emit(f"Cannot create edit folder: {e}")
+            return
+        # Keep the real name but avoid collisions between dirs/sessions.
+        local_path = os.path.join(editdir, f"{abs(hash(remote_path)) % 10**8}_{name}")
+        job = {"kind": "download", "src": remote_path, "dst": local_path,
+               "size": self._remote_size(remote_path), "name": name}
+        self._run_transfer(
+            [job], f"Opening {name} for editing…",
+            on_success=lambda: self._start_editing(local_path, remote_path))
+
+    def _start_editing(self, local_path, remote_path):
+        if not os.path.exists(local_path):
+            return
+        try:
+            mtime = os.path.getmtime(local_path)
+        except OSError:
+            mtime = 0
+        self._edits[local_path] = {"remote": remote_path, "mtime": mtime}
+        self._watcher.addPath(local_path)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(local_path))
+
+    def _on_edited_file_changed(self, local_path):
+        if local_path in self._prompting:
+            return
+        # Editors that save via atomic replace briefly remove the file; wait a
+        # beat before handling, then re-arm the watch.
+        QTimer.singleShot(150, lambda: self._handle_edit_change(local_path))
+
+    def _handle_edit_change(self, local_path):
+        info = self._edits.get(local_path)
+        if not info:
+            return
+        if not os.path.exists(local_path):
+            QTimer.singleShot(300, lambda: self._rearm_watch(local_path))
+            return
+        try:
+            mtime = os.path.getmtime(local_path)
+        except OSError:
+            return
+        if mtime == info["mtime"]:
+            self._rearm_watch(local_path)
+            return
+        info["mtime"] = mtime
+        name = posixpath.basename(info["remote"])
+        self._prompting.add(local_path)
+        reply = QMessageBox.question(
+            self, "Upload Changes",
+            f"“{name}” changed.\n\nUpload and overwrite it on the remote?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        self._prompting.discard(local_path)
+        if reply == QMessageBox.StandardButton.Yes:
+            job = {"kind": "upload", "src": local_path, "dst": info["remote"],
+                   "size": os.path.getsize(local_path) if os.path.exists(local_path) else 0,
+                   "name": name}
+            self._run_transfer(
+                [job], f"Uploading {name}…",
+                on_success=lambda: self._after_edit_upload(info))
+        self._rearm_watch(local_path)
+
+    def _rearm_watch(self, local_path):
+        if os.path.exists(local_path) and local_path not in self._watcher.files():
+            self._watcher.addPath(local_path)
+
+    def _after_edit_upload(self, info):
+        name = posixpath.basename(info["remote"])
+        self.error_occurred.emit(f"Uploaded changes to {name}")
+        if posixpath.dirname(info["remote"]) == self.current_path:
+            self.refresh()

@@ -116,6 +116,10 @@ class NativeTerminal(QWidget):
 
     # ---- feeding output ----
     def feed(self, text):
+        # Remember scrollback depth so we can keep a scrolled-up view pinned.
+        before_hist = len(self._screen.history.top) \
+            if hasattr(self._screen, "history") else 0
+
         # Split around alternate-screen enter/leave so vi/htop draw on a
         # separate buffer and the shell is restored when they exit.
         pos = 0
@@ -129,7 +133,19 @@ class NativeTerminal(QWidget):
         if self._predict_debug:
             self._debug_predict()
 
+        if self._scroll != 0 and hasattr(self._screen, "history"):
+            # User is scrolled up reading history: keep the view pinned to the
+            # same lines as new output pushes content into scrollback, instead
+            # of yanking the view back down to the bottom.
+            added = len(self._screen.history.top) - before_hist
+            if added > 0:
+                self._scroll = min(self._scroll + added,
+                                   len(self._screen.history.top))
+            self._screen.dirty.clear()
+            self.update()
+            return
         if self._scroll != 0:
+            # Alternate screen (no scrollback) — can't pin; show the live view.
             self._scroll = 0
             self._screen.dirty.clear()
             self.update()
