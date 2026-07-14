@@ -11,7 +11,7 @@ from omniterm.ui.sftp_browser import SFTPBrowser
 from omniterm.core.ssh_client import SSHWorker
 from omniterm.core.serial_client import SerialWorker
 from omniterm.core.local_pty import LocalPTYWorker
-from omniterm.core.config import HOME_DIR, set_home_dir, init_cipher, set_shared_sessions_file, get_terminal_settings, set_terminal_settings, export_sessions, import_sessions, get_use_inshellisense, set_use_inshellisense, get_layouts, save_layout, delete_layout, find_session, get_renderer, set_renderer
+from omniterm.core.config import HOME_DIR, set_home_dir, init_cipher, set_shared_sessions_file, get_terminal_settings, set_terminal_settings, export_sessions, import_sessions, get_use_inshellisense, set_use_inshellisense, get_layouts, save_layout, delete_layout, find_session, get_renderer, set_renderer, get_disable_gpu, set_disable_gpu
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -121,6 +121,10 @@ class MainWindow(QMainWindow):
             act.setChecked(current_renderer == key)
             act.triggered.connect(lambda _checked, k=key: self._set_renderer(k))
             self._renderer_group.addAction(act)
+        self.disable_gpu_action = self.settings_menu.addAction("Disable GPU Acceleration (fixes htop/btop blanking)")
+        self.disable_gpu_action.setCheckable(True)
+        self.disable_gpu_action.setChecked(get_disable_gpu())
+        self.disable_gpu_action.toggled.connect(self._toggle_disable_gpu)
         from omniterm.core.config import get_debug_logging
         self.debug_log_action = self.settings_menu.addAction("Debug: Log Terminal I/O")
         self.debug_log_action.setCheckable(True)
@@ -683,6 +687,16 @@ class MainWindow(QMainWindow):
                 "  npm install -g @microsoft/inshellisense\n\n"
                 "For SSH sessions it must be installed on the remote host. "
                 "Existing tabs are unaffected — open a new terminal to use it.")
+
+    def _toggle_disable_gpu(self, enabled):
+        set_disable_gpu(enabled)
+        QMessageBox.information(
+            self, "GPU Acceleration",
+            ("GPU acceleration DISABLED (software rendering).\n\n"
+             if enabled else "GPU acceleration ENABLED.\n\n") +
+            "Restart OmniTerm for this to take effect.\n\n"
+            "If htop/btop still blank the screen, keep this ON and set "
+            "Terminal Renderer to DOM.")
 
     def _set_renderer(self, key):
         set_renderer(key)

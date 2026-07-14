@@ -212,6 +212,31 @@ def delete_layout(name):
         return True
     return False
 
+def get_disable_gpu():
+    """When True, run QtWebEngine with software rendering (no GPU). Slower but
+    immune to GPU context-loss blanking (htop/btop) on flaky/virtual GPUs."""
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                value = json.load(f).get("disable_gpu")
+                if isinstance(value, bool):
+                    return value
+        except (json.JSONDecodeError, IOError):
+            pass
+    return False
+
+def set_disable_gpu(value):
+    config = {}
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    config["disable_gpu"] = bool(value)
+    with open(GLOBAL_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
 VALID_RENDERERS = ("dom", "canvas", "webgl")
 
 def get_renderer():
