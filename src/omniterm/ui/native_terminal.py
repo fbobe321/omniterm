@@ -351,6 +351,43 @@ class NativeTerminal(QWidget):
             if cb is not None:
                 cb.setText(text)
 
+    def _extend_keyboard_selection(self, key):
+        # Keyboard text selection (Shift+Arrow/Home/End), seeded at the cursor.
+        if self._sel_anchor is None or self._sel_head is None:
+            if self._scroll != 0:
+                self._scroll = 0
+            origin = (self._screen.cursor.y, self._screen.cursor.x)
+            self._sel_anchor = origin
+            self._sel_head = origin
+        row, col = self._sel_head
+        if key == Qt.Key.Key_Left:
+            col -= 1
+        elif key == Qt.Key.Key_Right:
+            col += 1
+        elif key == Qt.Key.Key_Up:
+            row -= 1
+        elif key == Qt.Key.Key_Down:
+            row += 1
+        elif key == Qt.Key.Key_Home:
+            col = 0
+        elif key == Qt.Key.Key_End:
+            col = self._cols
+        # wrap horizontal movement across line boundaries
+        if col < 0:
+            if row > 0:
+                row, col = row - 1, self._cols
+            else:
+                col = 0
+        elif col > self._cols:
+            if row < self._rows - 1:
+                row, col = row + 1, 0
+            else:
+                col = self._cols
+        row = max(0, min(self._rows - 1, row))
+        self._sel_head = (row, col)
+        self._copy_selection()  # copy-on-select, matching mouse behaviour
+        self.update()
+
     def _paste(self):
         cb = QGuiApplication.clipboard()
         if cb is not None and cb.text():
@@ -387,6 +424,10 @@ class NativeTerminal(QWidget):
         Qt.Key.Key_Up: "A", Qt.Key.Key_Down: "B", Qt.Key.Key_Right: "C",
         Qt.Key.Key_Left: "D", Qt.Key.Key_Home: "H", Qt.Key.Key_End: "F",
     }
+    _SEL_KEYS = {
+        Qt.Key.Key_Left, Qt.Key.Key_Right, Qt.Key.Key_Up, Qt.Key.Key_Down,
+        Qt.Key.Key_Home, Qt.Key.Key_End,
+    }
     _SPECIAL = {
         Qt.Key.Key_Return: "\r", Qt.Key.Key_Enter: "\r",
         Qt.Key.Key_Backspace: "\x7f", Qt.Key.Key_Tab: "\t",
@@ -422,6 +463,16 @@ class NativeTerminal(QWidget):
         if ctrl and not shift and key == Qt.Key.Key_V:
             self._paste()
             return
+
+        # Shift+Arrow/Home/End extend a keyboard text selection instead of
+        # sending a movement escape. A plain (non-shift) arrow collapses it.
+        if shift and not ctrl and key in self._SEL_KEYS:
+            self._extend_keyboard_selection(key)
+            return
+        if not shift and key in self._SEL_KEYS and self._sel_anchor is not None:
+            self._sel_anchor = None
+            self._sel_head = None
+            self.update()
 
         seq = self._SPECIAL.get(key)
         if seq is None and key in self._CURSOR:
