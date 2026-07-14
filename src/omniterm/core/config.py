@@ -212,6 +212,35 @@ def delete_layout(name):
         return True
     return False
 
+VALID_RENDERERS = ("dom", "canvas", "webgl")
+
+def get_renderer():
+    """Terminal renderer: 'dom' (most stable), 'canvas', or 'webgl' (fastest,
+    but can blank under heavy full-screen redraws like htop/btop)."""
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                value = json.load(f).get("renderer")
+                if value in VALID_RENDERERS:
+                    return value
+        except (json.JSONDecodeError, IOError):
+            pass
+    return "dom"
+
+def set_renderer(value):
+    if value not in VALID_RENDERERS:
+        value = "dom"
+    config = {}
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    config["renderer"] = value
+    with open(GLOBAL_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
 import time as _time
 DEBUG_LOG_FILE = HOME_DIR / "omniterm_debug.log"
 _debug_enabled_cache = None

@@ -52,21 +52,21 @@
         term.loadAddon(fitAddon);
         term.open(document.getElementById('terminal'));
 
-        // The default DOM renderer flickers per-keystroke inside Qt WebEngine.
-        // Prefer the GPU (WebGL) renderer, then canvas, then fall back to DOM.
+        // Renderer is chosen by the ?renderer= URL param (default 'dom').
+        // 'dom' is the most stable in Qt WebEngine and does NOT blank under
+        // heavy full-screen redraws (htop/btop); 'webgl'/'canvas' are faster
+        // but 'webgl' can lose its GPU context and blank.
+        var _renderer = new URLSearchParams(window.location.search).get('renderer') || 'dom';
         (function () {
             try {
-                if (window.WebglAddon) {
+                if (_renderer === 'webgl' && window.WebglAddon) {
                     var webgl = new WebglAddon.WebglAddon();
                     webgl.onContextLoss(function () { webgl.dispose(); });
                     term.loadAddon(webgl);
-                    return;
-                }
-            } catch (e) { /* try canvas next */ }
-            try {
-                if (window.CanvasAddon) {
+                } else if (_renderer === 'canvas' && window.CanvasAddon) {
                     term.loadAddon(new CanvasAddon.CanvasAddon());
                 }
+                // 'dom' (or anything else): use xterm's built-in DOM renderer.
             } catch (e) { /* fall back to the DOM renderer */ }
         })();
 

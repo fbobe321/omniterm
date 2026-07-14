@@ -73,10 +73,11 @@ class TerminalTab(QWidget):
     close_requested = pyqtSignal()
     activity = pyqtSignal()  # emitted when output arrives (for tab activity dot)
 
-    def __init__(self, session_name, parent=None, windows_mode=False):
+    def __init__(self, session_name, parent=None, windows_mode=False, renderer="dom"):
         super().__init__(parent)
         self.session_name = session_name
         self._windows_mode = windows_mode
+        self._renderer = renderer
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(0, 0, 0, 0)
         self.layout.setSpacing(0)
@@ -116,8 +117,10 @@ class TerminalTab(QWidget):
         # Load local index.html
         file_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "static", "xterm", "index.html"))
         self._index_url = QUrl.fromLocalFile(file_path)
+        params = [f"renderer={self._renderer}"]
         if self._windows_mode:
-            self._index_url.setQuery("win=1")
+            params.append("win=1")
+        self._index_url.setQuery("&".join(params))
         self.web_view.setUrl(self._index_url)
 
         # Worker management
