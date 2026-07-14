@@ -62,6 +62,25 @@ def test_history_predictor_recency(tmp_path):
     assert p.predict("git co") == "git commit -m wip"
 
 
+def test_history_predictor_frequency_is_mild(tmp_path):
+    h = CommandHistory(path=str(tmp_path / "h.jsonl"))
+    # 'git status' run many times, but a while ago; 'git stash' run once, most
+    # recently. Recency must still win (fish-like) — frequency is only a nudge.
+    for _ in range(8):
+        h.record("git status")
+    h.record("git stash")
+    p = HistoryPredictor(h)
+    assert p.predict("git st") == "git stash"          # recency dominates
+    # Among commands at similar recency, the more frequent one wins the tie.
+    h2 = CommandHistory(path=str(tmp_path / "h2.jsonl"))
+    h2.record("make test")
+    h2.record("make build")
+    h2.record("make test")
+    h2.record("make build")
+    h2.record("make test")      # 'make test' both more frequent and most recent
+    assert HistoryPredictor(h2).predict("make ") == "make test"
+
+
 def test_history_predictor_cwd_boost(tmp_path):
     h = CommandHistory(path=str(tmp_path / "h.jsonl"))
     h.record("deploy alpha", cwd="/other")

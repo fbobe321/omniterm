@@ -317,12 +317,17 @@ class NativeTerminal(QWidget):
             return
         rect = QRectF(cx * self._cw, cy * self._ch, self._cw, self._ch)
         p.fillRect(rect, self._cursor_color)
-        # redraw glyph under the block cursor in the background colour
+        # Redraw the glyph under the block cursor in the background colour. When
+        # a suggestion is showing, the cell is blank but the cursor sits on the
+        # first shadow character — draw it so the whole suggestion stays
+        # readable instead of the cursor block hiding its first letter.
         ch = self._screen.buffer[cy][cx] if cx in self._screen.buffer[cy] else _BLANK
-        if ch.data and ch.data.strip():
+        glyph = ch.data if (ch.data and ch.data.strip()) else \
+            (self._shadow[0] if self._shadow else "")
+        if glyph:
             p.setPen(self._bg)
             p.setFont(self._font)
-            p.drawText(QPointF(cx * self._cw, cy * self._ch + self._ascent), ch.data)
+            p.drawText(QPointF(cx * self._cw, cy * self._ch + self._ascent), glyph)
 
     def _selection_span(self):
         if self._sel_anchor is None or self._sel_head is None:

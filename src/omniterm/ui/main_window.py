@@ -897,8 +897,23 @@ class MainWindow(QMainWindow):
     def split_4(self):
         self.show_split_view_dialog("4")
 
+    # Built-in terminal keys handled inside the terminal widget itself. They are
+    # context-sensitive (they only act when a suggestion/selection is present and
+    # otherwise pass through to the shell), so they are shown for reference here
+    # rather than as globally-rebindable QShortcuts.
+    TERMINAL_KEY_REFERENCE = [
+        ("Accept command suggestion", "Ctrl+F  /  End  /  →"),
+        ("Accept one word of suggestion", "Ctrl+→"),
+        ("Copy selection", "Ctrl+Shift+C  (also copy-on-select)"),
+        ("Paste", "Ctrl+V  /  Ctrl+Shift+V  /  Shift+Insert  /  middle-click"),
+        ("Extend selection (keyboard)", "Shift+Arrows / Shift+Home / Shift+End"),
+        ("Interrupt (SIGINT)", "Ctrl+C"),
+        ("Shell completion", "Tab  /  Shift+Tab"),
+    ]
+
     def show_shortcuts_dialog(self):
         from omniterm.core.config import get_shortcuts, set_shortcuts
+        from PyQt6.QtWidgets import QLabel
         overrides = get_shortcuts()
 
         dialog = QDialog(self)
@@ -910,6 +925,14 @@ class MainWindow(QMainWindow):
             editor = QKeySequenceEdit(QKeySequence(overrides.get(sid, default)))
             editors[sid] = editor
             form.addRow(label, editor)
+
+        # Reference-only section for built-in, context-sensitive terminal keys.
+        heading = QLabel("<b>Terminal (built-in)</b>")
+        form.addRow(heading)
+        for label, keys in self.TERMINAL_KEY_REFERENCE:
+            value = QLabel(keys)
+            value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            form.addRow(label, value)
 
         def save():
             mapping = {}
