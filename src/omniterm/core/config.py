@@ -380,6 +380,39 @@ def set_use_inshellisense(value):
     with open(GLOBAL_CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=2)
 
+DEFAULT_SHADOW_PREDICTOR = {
+    "enabled": False,      # off until validated
+    "min_prefix": 1,       # min typed chars before suggesting
+    "history_depth": 2000,  # commands kept/scanned for ranking
+    "accept_key": "right",  # right-arrow at end of line accepts
+}
+
+def get_shadow_predictor():
+    settings = dict(DEFAULT_SHADOW_PREDICTOR)
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                stored = json.load(f).get("shadow_predictor")
+                if isinstance(stored, dict):
+                    settings.update({k: v for k, v in stored.items() if v is not None})
+        except (json.JSONDecodeError, IOError):
+            pass
+    return settings
+
+def set_shadow_predictor(settings):
+    config = {}
+    if GLOBAL_CONFIG_FILE.exists():
+        try:
+            with open(GLOBAL_CONFIG_FILE, "r") as f:
+                config = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
+    merged = dict(config["shadow_predictor"]) if isinstance(config.get("shadow_predictor"), dict) else {}
+    merged.update(settings)
+    config["shadow_predictor"] = merged
+    with open(GLOBAL_CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
+
 def get_group_folders_first():
     if GLOBAL_CONFIG_FILE.exists():
         try:

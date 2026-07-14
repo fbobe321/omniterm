@@ -95,6 +95,9 @@ class TerminalTab(QWidget):
         self.terminal.apply_appearance(
             settings.get("fontFamily"), settings.get("fontSize"),
             settings.get("foreground"), settings.get("background"))
+        # Pick up shadow-predictor settings changes.
+        if hasattr(self.terminal, "_load_predict_settings"):
+            self.terminal._load_predict_settings()
 
     def set_worker(self, worker):
         self.worker = worker
@@ -103,6 +106,9 @@ class TerminalTab(QWidget):
         worker.error_occurred.connect(self.handle_error)
         if hasattr(worker, "disconnected"):
             worker.disconnected.connect(self.on_disconnected)
+        # Feed the shell's working directory (OSC 7) to the shadow predictor.
+        if hasattr(worker, "cwd_changed") and hasattr(self.terminal, "set_cwd"):
+            worker.cwd_changed.connect(self.terminal.set_cwd)
         if hasattr(worker, "resize"):
             worker.resize(self.terminal._cols, self.terminal._rows)
 
@@ -120,6 +126,10 @@ class TerminalTab(QWidget):
                 pass
         try:
             w.disconnected.disconnect(self.on_disconnected)
+        except (TypeError, RuntimeError, AttributeError):
+            pass
+        try:
+            w.cwd_changed.disconnect(self.terminal.set_cwd)
         except (TypeError, RuntimeError, AttributeError):
             pass
 

@@ -4,6 +4,7 @@ Renders the terminal grid directly with QPainter instead of xterm.js in a web
 view, for native-terminal smoothness (no browser, no GPU context loss, minimal
 input latency).
 """
+import os
 import re
 import pyte
 from PyQt6.QtWidgets import QWidget, QApplication, QMenu
@@ -60,6 +61,27 @@ class NativeTerminal(QWidget):
 
         self._set_font("Consolas, monospace", 12)
 
+        # Shadow-predictor Phase 0 spike: when OMNITERM_PREDICT_DEBUG is set,
+        # reconstruct the current command line from the screen and log it.
+        self._predict_debug = bool(os.environ.get("OMNITERM_PREDICT_DEBUG"))
+
+        # Shadow predictor (Phase 1). Command-line tracking uses a prompt-end
+        # column captured at the first keystroke of each line (prompt-agnostic),
+        # not symbol guessing. Prediction is history-based; the suggestion is
+        # drawn as dim shadow text and accepted with Right-arrow at line end.
+        self._cwd = None
+        self._shadow = ""            # predicted suffix rendered after the cursor
+        self._shadow_color = QColor("#6b7280")
+        self._line_active = False    # are we tracking an editable prompt line?
+        self._prompt_row = 0
+        self._prompt_col = 0         # where the command starts on _prompt_row
+        self._typed_count = 0        # printable keys forwarded this line
+        self._masked = False         # no-echo (password) input on this line
+        self._history = None
+        self._predictor = None
+        self._predict_cfg = {"enabled": False, "min_prefix": 1}
+        self._load_predict_settings()
+
         # cursor blink
         self._cursor_on = True
         self._blink = QTimer(self)
@@ -102,6 +124,10 @@ class NativeTerminal(QWidget):
             self._switch_alt(m.group(1) == "h")
             pos = m.end()
         self._feed_active(text[pos:])
+
+        self._update_prediction()
+        if self._predict_debug:
+            self._debug_predict()
 
         if self._scroll != 0:
             self._scroll = 0
@@ -258,7 +284,24 @@ class NativeTerminal(QWidget):
                     p.setPen(fgc)
                     p.drawText(QPointF(x, y + self._ascent), text)
 
+        self._paint_shadow(p)
         self._paint_cursor(p)
+
+    def _paint_shadow(self, p):
+        """Draw the predicted suffix dim, starting at the cursor cell."""
+        if not self._shadow or self._scroll != 0:
+            return
+        cx = self._screen.cursor.x
+        cy = self._screen.cursor.y
+        if cy >= self._rows or cx >= self._cols:
+            return
+        avail = self._cols - cx
+        if avail <= 0:
+            return
+        text = self._shadow[:avail]
+        p.setFont(self._font)
+        p.setPen(self._shadow_color)
+        p.drawText(QPointF(cx * self._cw, cy * self._ch + self._ascent), text)
 
     def _paint_cursor(self, p):
         if self._scroll != 0 or self._screen.cursor.hidden or not self._cursor_on:
@@ -415,6 +458,219 @@ class NativeTerminal(QWidget):
         self._scroll = int(max(0, min(maxscroll, self._scroll + steps * 3)))
         self.update()
 
+    # ---- shadow predictor: command-line reconstruction (Phase 0 spike) ----
+    # The remote shell owns line editing; we only see echoed output. To predict
+    # (and later Tab-populate) the next command we must recover the current
+    # command line from the pyte screen: locate where the prompt ends and read
+    # from there to the end of the typed text.
+    #
+    # Prompt detection is heuristic and the known-fragile part of this feature.
+    # We prefer a "strong" terminator ($ # % ❯ ➜ » ›) and fall back to the weak
+    # ">" (Windows / PowerShell) only when no strong one is present, so that a
+    # redirection like `ls > out` after a "$ " prompt isn't mistaken for a prompt.
+    _PROMPT_STRONG = re.compile(r'[\$#%❯➜»›](?=\s)')
+    _PROMPT_WEAK = re.compile(r'>(?=\s)')
+
+    def _line_text(self, row):
+        """Full text of a screen row on the active buffer."""
+        line = self._screen.buffer[row]
+        return "".join((line[i].data if i in line and line[i].data else " ")
+                       for i in range(self._cols))
+
+    def _reconstruct_line(self):
+        """Best-effort recovery of the current command line.
+
+        Returns (prompt, buffer, cursor_col) where ``buffer`` is the typed
+        command (may extend past the cursor if the user moved left) and
+        ``cursor_col`` is the cursor's offset within it, or None if no prompt
+        is found / we're on the alternate screen.
+
+        Phase 0 limitation: single (unwrapped) screen line only.
+        """
+        if self._in_alt:
+            return None
+        cy = self._screen.cursor.y
+        cx = self._screen.cursor.x
+        if cy >= self._rows:
+            return None
+        text = self._line_text(cy)
+        head = text[:cx]  # only look before the cursor for the prompt
+
+        last = None
+        for m in self._PROMPT_STRONG.finditer(head):
+            last = m
+        if last is None:
+            for m in self._PROMPT_WEAK.finditer(head):
+                last = m
+        if last is None:
+            return None
+
+        end = last.end()  # just past the terminator
+        while end < len(head) and head[end] == " ":
+            end += 1  # skip the space(s) between prompt and command
+        prompt = text[:end]
+        buffer = text[end:].rstrip()
+        cursor_col = max(0, cx - end)
+        return prompt, buffer, cursor_col
+
+    def _debug_predict(self):
+        if not self._predict_debug:
+            return
+        try:
+            r = self._reconstruct_line()
+            path = os.path.expanduser("~/.omniterm_predict_debug.log")
+            with open(path, "a", encoding="utf-8") as f:
+                if r is None:
+                    f.write("recon: <none>\n")
+                else:
+                    prompt, buffer, col = r
+                    f.write("recon: prompt=%r buffer=%r cur=%d\n"
+                            % (prompt, buffer, col))
+        except Exception:
+            pass
+
+    # ---- shadow predictor: Phase 1 (history-based suggestions) ----
+    def _load_predict_settings(self):
+        """(Re)load predictor config and instantiate the engine. Safe to call
+        repeatedly (e.g. after Settings changes); tolerant of missing config."""
+        try:
+            from ..core import config
+            self._predict_cfg = config.get_shadow_predictor()
+        except Exception:
+            self._predict_cfg = {"enabled": False, "min_prefix": 1}
+        if self._history is None:
+            try:
+                from ..core.command_history import CommandHistory
+                self._history = CommandHistory()
+            except Exception:
+                self._history = None
+        if self._history is not None and self._predictor is None:
+            try:
+                from ..core.predictor import HistoryPredictor
+                self._predictor = HistoryPredictor(self._history)
+            except Exception:
+                self._predictor = None
+
+    def _predict_on(self):
+        return bool(self._predictor and self._predict_cfg.get("enabled"))
+
+    def set_cwd(self, path):
+        """Report the shell's working directory (from OSC 7) for cwd-aware
+        ranking. Also invalidates any stale line tracking on a new prompt."""
+        self._cwd = path
+
+    def _current_buffer(self):
+        """(buffer, at_end) for the active prompt line, or None.
+
+        ``buffer`` is exactly the text typed left of the cursor (so a trailing
+        space is preserved — it's a real prefix); ``at_end`` is True when nothing
+        but padding sits to the right of the cursor. Uses the prompt-end column
+        captured at the first keystroke — no symbol guessing. Phase 1 tracks a
+        single (unwrapped) row; a wrapped/scrolled line yields None (suppressed).
+        """
+        if not self._line_active or self._in_alt:
+            return None
+        cy = self._screen.cursor.y
+        cx = self._screen.cursor.x
+        if cy != self._prompt_row or cx < self._prompt_col:
+            return None
+        text = self._line_text(cy)
+        buffer = text[self._prompt_col:cx]
+        at_end = text[cx:].rstrip() == ""
+        return buffer, at_end
+
+    def _set_shadow(self, s):
+        if s != self._shadow:
+            self._shadow = s
+            self.update()
+
+    def _update_prediction(self):
+        if not self._predict_on():
+            self._set_shadow("")
+            return
+        cur = self._current_buffer()
+        if cur is None:
+            self._set_shadow("")
+            return
+        buffer, at_end = cur
+        # Privacy: printable keys forwarded but nothing echoed => masked input
+        # (a password prompt). Suspend suggestions AND history recording.
+        if self._typed_count >= 2 and len(buffer) == 0:
+            self._masked = True
+        if self._masked:
+            self._set_shadow("")
+            return
+        # Only suggest with the cursor at end of line, past the min prefix, and
+        # never off a line that carries an inline secret.
+        min_prefix = self._predict_cfg.get("min_prefix", 1)
+        if not at_end or len(buffer) < max(1, min_prefix):
+            self._set_shadow("")
+            return
+        try:
+            from ..core.command_history import is_sensitive_command
+            if is_sensitive_command(buffer):
+                self._set_shadow("")
+                return
+        except Exception:
+            pass
+        try:
+            full = self._predictor.predict(buffer, self._cwd)
+        except Exception:
+            full = None
+        if full and full.startswith(buffer) and len(full) > len(buffer):
+            self._set_shadow(full[len(buffer):])
+        else:
+            self._set_shadow("")
+
+    def _accept_shadow(self):
+        text = self._shadow
+        if not text:
+            return
+        self._shadow = ""
+        self._typed_count += len(text)
+        self.send_input.emit(text)   # echoes back; next feed re-predicts
+        self.update()
+
+    def _record_command(self):
+        """Record the just-submitted command (called on Enter). Skips masked
+        input; the history store additionally drops anything secret-looking."""
+        if self._masked or not self._predict_on():
+            return
+        cur = self._current_buffer()
+        if not cur:
+            return
+        cmd = cur[0].strip()
+        if cmd and self._history is not None:
+            try:
+                self._history.record(cmd, self._cwd)
+            except Exception:
+                pass
+
+    def _reset_line(self):
+        self._line_active = False
+        self._typed_count = 0
+        self._masked = False
+        self._set_shadow("")
+
+    def _note_forwarded(self, key, seq):
+        """Maintain command-line tracking as input is forwarded to the shell."""
+        if not self._line_active:
+            # First key of a new line: the cursor sits at the prompt end.
+            self._prompt_row = self._screen.cursor.y
+            self._prompt_col = self._screen.cursor.x
+            self._line_active = True
+            self._typed_count = 0
+            self._masked = False
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._record_command()
+            self._reset_line()
+        elif seq == "\x03":          # Ctrl+C aborts the line
+            self._reset_line()
+        elif key == Qt.Key.Key_Backspace:
+            self._typed_count = max(0, self._typed_count - 1)
+        elif seq and len(seq) == 1 and seq.isprintable():
+            self._typed_count += 1
+
     # ---- keyboard ----
     # Cursor keys depend on DECCKM (application cursor keys): SS3 (ESC O x) when
     # set, CSI (ESC [ x) when reset. inshellisense/readline/vi enable DECCKM and
@@ -474,6 +730,13 @@ class NativeTerminal(QWidget):
             self._sel_head = None
             self.update()
 
+        # Accept the shadow suggestion with Right-arrow at end of line. The
+        # shadow is only ever set with the cursor at the buffer end, so its
+        # presence implies we're at line end.
+        if self._shadow and not shift and not ctrl and key == Qt.Key.Key_Right:
+            self._accept_shadow()
+            return
+
         seq = self._SPECIAL.get(key)
         if seq is None and key in self._CURSOR:
             prefix = "\x1bO" if self._DECCKM in self._screen.mode else "\x1b["
@@ -487,6 +750,7 @@ class NativeTerminal(QWidget):
             if self._scroll != 0:
                 self._scroll = 0
                 self.update()
+            self._note_forwarded(key, seq)
             self.send_input.emit(seq)
         else:
             super().keyPressEvent(event)
