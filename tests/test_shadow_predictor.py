@@ -181,6 +181,35 @@ def test_tab_is_left_for_shell_completion(qapp, tmp_path):
     assert w.sent == ["\t"]                        # Tab passes through to shell
 
 
+def test_tab_reaches_shell_through_event_system(qapp):
+    """Regression: Qt must not steal Tab for focus traversal. Sent through the
+    REAL event() path (not keyPressEvent directly), Tab must keep focus on the
+    terminal and deliver \\t to the shell; Shift+Tab delivers back-tab."""
+    from omniterm.ui.native_terminal import NativeTerminal
+    from PyQt6.QtWidgets import QTabWidget, QMainWindow
+    win = QMainWindow()
+    tabs = QTabWidget()
+    win.setCentralWidget(tabs)
+    term = NativeTerminal()
+    tabs.addTab(term, "one")
+    tabs.addTab(NativeTerminal(), "two")
+    win.show()
+    term.setFocus()
+    qapp.processEvents()
+    assert term.focusNextPrevChild(True) is False
+    sent = []
+    term.send_input.connect(lambda s: sent.append(s))
+    qapp.sendEvent(term, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Tab,
+                                   Qt.KeyboardModifier.NoModifier, ""))
+    assert qapp.focusWidget() is term      # focus did NOT jump to the tab bar
+    assert sent == ["\t"]
+    sent.clear()
+    qapp.sendEvent(term, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Backtab,
+                                   Qt.KeyboardModifier.ShiftModifier, ""))
+    assert sent == ["\x1b[Z"]
+    win.close()
+
+
 def test_end_and_right_also_accept(qapp, tmp_path):
     h = CommandHistory(path=str(tmp_path / "h.jsonl"))
     h.record("npm run build")

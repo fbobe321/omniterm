@@ -727,6 +727,7 @@ class NativeTerminal(QWidget):
     _SPECIAL = {
         Qt.Key.Key_Return: "\r", Qt.Key.Key_Enter: "\r",
         Qt.Key.Key_Backspace: "\x7f", Qt.Key.Key_Tab: "\t",
+        Qt.Key.Key_Backtab: "\x1b[Z",  # Shift+Tab (reverse completion)
         Qt.Key.Key_Escape: "\x1b",
         Qt.Key.Key_PageUp: "\x1b[5~", Qt.Key.Key_PageDown: "\x1b[6~",
         Qt.Key.Key_Insert: "\x1b[2~", Qt.Key.Key_Delete: "\x1b[3~",
@@ -737,6 +738,14 @@ class NativeTerminal(QWidget):
         Qt.Key.Key_F9: "\x1b[20~", Qt.Key.Key_F10: "\x1b[21~",
         Qt.Key.Key_F11: "\x1b[23~", Qt.Key.Key_F12: "\x1b[24~",
     }
+
+    def focusNextPrevChild(self, next):
+        # A terminal owns Tab and Shift+Tab (shell completion / reverse
+        # completion). Returning False stops Qt from consuming them for focus
+        # traversal between widgets — otherwise Tab would jump to the tab bar or
+        # menu and never reach the shell. Qt then delivers the key to
+        # keyPressEvent, where _SPECIAL sends "\t" / "\x1b[Z".
+        return False
 
     def keyPressEvent(self, event):
         key = event.key()
