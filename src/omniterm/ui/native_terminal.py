@@ -4,10 +4,14 @@ Renders the terminal grid directly with QPainter instead of xterm.js in a web
 view, for native-terminal smoothness (no browser, no GPU context loss, minimal
 input latency).
 """
+import re
 import pyte
 from PyQt6.QtWidgets import QWidget, QApplication
 from PyQt6.QtGui import QPainter, QFont, QFontMetricsF, QColor, QGuiApplication
 from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF, QTimer
+
+# Alternate-screen enter/leave sequences (vi, htop, btop, less, ...)
+_ALT_RE = re.compile(r'\x1b\[\?(?:1049|1047|47)([hl])')
 
 # 16-colour ANSI palette (matches the web terminal theme)
 _BASE = {
@@ -45,9 +49,14 @@ class NativeTerminal(QWidget):
         self._sel_head = None
         self._color_cache = {}
 
-        self._screen = pyte.HistoryScreen(self._cols, self._rows, history=5000, ratio=0.5)
-        self._screen.set_mode(pyte.modes.LNM)
-        self._stream = pyte.Stream(self._screen)
+        # Main screen (with scrollback) + a separate alternate screen (vi/htop).
+        self._main_screen = pyte.HistoryScreen(self._cols, self._rows, history=5000, ratio=0.5)
+        self._alt_screen = pyte.Screen(self._cols, self._rows)
+        self._main_stream = pyte.Stream(self._main_screen)
+        self._alt_stream = pyte.Stream(self._alt_screen)
+        self._screen = self._main_screen
+        self._stream = self._main_stream
+        self._in_alt = False
 
         self._set_font("Consolas, monospace", 12)
 
@@ -85,10 +94,15 @@ class NativeTerminal(QWidget):
 
     # ---- feeding output ----
     def feed(self, text):
-        try:
-            self._stream.feed(text)
-        except Exception:
-            pass
+        # Split around alternate-screen enter/leave so vi/htop draw on a
+        # separate buffer and the shell is restored when they exit.
+        pos = 0
+        for m in _ALT_RE.finditer(text):
+            self._feed_active(text[pos:m.start()])
+            self._switch_alt(m.group(1) == "h")
+            pos = m.end()
+        self._feed_active(text[pos:])
+
         if self._scroll != 0:
             self._scroll = 0
             self._screen.dirty.clear()
@@ -101,6 +115,35 @@ class NativeTerminal(QWidget):
             for y in dirty:
                 self.update(0, int(y * self._ch), self.width(), int(self._ch) + 2)
         dirty.clear()
+
+    def _feed_active(self, text):
+        if not text:
+            return
+        # pyte ignores ANSI.SYS save/restore cursor (ESC[s / ESC[u); translate
+        # to the DEC form (ESC 7 / ESC 8) which it handles. Inshellisense relies
+        # on this to position its suggestion box correctly.
+        if "\x1b[s" in text or "\x1b[u" in text:
+            text = text.replace("\x1b[s", "\x1b7").replace("\x1b[u", "\x1b8")
+        try:
+            self._stream.feed(text)
+        except Exception:
+            pass
+
+    def _switch_alt(self, enter):
+        if enter == self._in_alt:
+            return
+        self._in_alt = enter
+        self._scroll = 0
+        if enter:
+            self._alt_screen.reset()
+            self._alt_screen.resize(self._rows, self._cols)
+            self._screen = self._alt_screen
+            self._stream = self._alt_stream
+        else:
+            self._screen = self._main_screen
+            self._stream = self._main_stream
+            self._main_screen.dirty.update(range(self._rows))
+        self.update()
 
     def _toggle_cursor(self):
         self._cursor_on = not self._cursor_on
@@ -117,10 +160,11 @@ class NativeTerminal(QWidget):
         rows = max(1, int(self.height() / self._ch))
         if cols != self._cols or rows != self._rows:
             self._cols, self._rows = cols, rows
-            try:
-                self._screen.resize(rows, cols)
-            except Exception:
-                pass
+            for scr in (self._main_screen, self._alt_screen):
+                try:
+                    scr.resize(rows, cols)
+                except Exception:
+                    pass
             self.resized.emit(cols, rows)
 
     # ---- colours ----
@@ -142,7 +186,7 @@ class NativeTerminal(QWidget):
 
     def _visible_lines(self):
         buf = self._screen.buffer
-        if self._scroll == 0:
+        if self._scroll == 0 or not hasattr(self._screen, "history"):
             return [buf[y] for y in range(self._rows)]
         hist = list(self._screen.history.top)
         alllines = hist + [buf[y] for y in range(self._rows)]
@@ -306,6 +350,8 @@ class NativeTerminal(QWidget):
 
     # ---- scrollback ----
     def wheelEvent(self, event):
+        if not hasattr(self._screen, "history"):
+            return  # no scrollback on the alternate screen
         steps = event.angleDelta().y() / 120.0
         maxscroll = len(self._screen.history.top)
         self._scroll = int(max(0, min(maxscroll, self._scroll + steps * 3)))
