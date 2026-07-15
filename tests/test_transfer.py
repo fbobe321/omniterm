@@ -103,6 +103,19 @@ def test_edit_change_accepted_uploads_to_remote(qapp, tmp_path, monkeypatch):
     assert job["kind"] == "upload" and job["dst"] == "/r/e.txt" and job["src"] == str(lp)
 
 
+def test_edit_upload_reports_status_not_error(qapp):
+    """A successful edit-upload is a status message (green), not an [SFTP ERROR]."""
+    br = sb.SFTPBrowser()
+    br.sftp = sb.LocalFSAdapter()
+    br.current_path = "/somewhere/else"     # avoid triggering a refresh
+    statuses, errors = [], []
+    br.status_message.connect(lambda m: statuses.append(m))
+    br.error_occurred.connect(lambda m: errors.append(m))
+    br._after_edit_upload({"remote": "/r/file.txt"})
+    assert statuses and "file.txt" in statuses[0]
+    assert errors == []
+
+
 def test_unchanged_file_does_not_prompt(qapp, tmp_path, monkeypatch):
     br = sb.SFTPBrowser()
     br.sftp = sb.LocalFSAdapter()

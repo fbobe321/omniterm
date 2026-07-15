@@ -195,6 +195,7 @@ class SFTPTreeView(QTreeView):
 
 class SFTPBrowser(QDockWidget):
     error_occurred = pyqtSignal(str)
+    status_message = pyqtSignal(str)   # informational (success) — not an error
 
     def __init__(self, parent=None):
         super().__init__("FILES", parent)
@@ -792,6 +793,6 @@ class SFTPBrowser(QDockWidget):
 
     def _after_edit_upload(self, info):
         name = posixpath.basename(info["remote"])
-        self.error_occurred.emit(f"Uploaded changes to {name}")
+        self.status_message.emit(f"Uploaded changes to {name}")
         if posixpath.dirname(info["remote"]) == self.current_path:
             self.refresh()

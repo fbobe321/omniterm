@@ -44,6 +44,7 @@ class MainWindow(QMainWindow):
         self.sftp_browser = SFTPBrowser(self)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.sftp_browser)
         self.sftp_browser.error_occurred.connect(self.show_sftp_error)
+        self.sftp_browser.status_message.connect(self.show_sftp_status)
 
         # Show the active tab's remote files when the selected tab changes
         self.tabs.currentChanged.connect(self.on_tab_changed)
@@ -961,6 +962,14 @@ class MainWindow(QMainWindow):
             current_tab._write(f"\r\n\x1b[31m[SFTP ERROR]: {msg}\x1b[0m\r\n")
         else:
             print(f"SFTP Error: {msg}")
+
+    def show_sftp_status(self, msg):
+        # Informational SFTP messages (e.g. upload succeeded) — green, not red.
+        current_tab = self.tabs.currentWidget()
+        if current_tab and hasattr(current_tab, '_write'):
+            current_tab._write(f"\r\n\x1b[32m[SFTP]: {msg}\x1b[0m\r\n")
+        else:
+            print(f"SFTP: {msg}")
 
     def show_set_home_dir_dialog(self):
         dialog = QDialog(self)
