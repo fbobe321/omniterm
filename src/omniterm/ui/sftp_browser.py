@@ -234,9 +234,9 @@ class SFTPBrowser(QDockWidget):
         # "Follow terminal folder" checkbox above the tree
         self.follow_check = QCheckBox("Follow terminal folder")
         self.follow_check.setToolTip(
-            "Keep this panel in sync with the shell's current directory. "
-            "Enabling this configures the session's bash prompt to report its "
-            "directory (sends a one-time 'export PROMPT_COMMAND=...').")
+            "Keep this panel in sync with the shell's current directory as you "
+            "cd around. Local terminals follow automatically; SSH sessions get a "
+            "one-time bash prompt setup (sent invisibly, nothing to clean up).")
         self.follow_check.toggled.connect(self._on_follow_toggled)
 
         container = QWidget()
@@ -317,15 +317,33 @@ class SFTPBrowser(QDockWidget):
             return
         self._activate_state(state)
 
-    # Bash setup that makes the shell report its directory via OSC 7 each prompt.
-    # Sent (once) to a session when "Follow terminal folder" is enabled.
+    # Bash setup that makes an SSH session report its directory via OSC 7 each
+    # prompt, sent once when "Follow terminal folder" is enabled. Local/home
+    # terminals don't need this - PROMPT_COMMAND is set in their environment at
+    # spawn (see local_pty.py), so nothing is ever typed into them.
+    #
+    # It is sent with a leading space (kept out of shell history) and, once run,
+    # erases its own echoed line (\033[1A\033[2K) so the user doesn't have to
+    # delete it. The host part of the URI is omitted (the panel ignores it) to
+    # keep the line short. On typical terminal widths the echo is erased fully;
+    # on a narrow terminal where it wraps, a remnant row may remain - we only
+    # ever clear the one line we know is ours, never scrollback above it.
     FOLLOW_CMD = (
-        ' export PROMPT_COMMAND=\'printf "\\033]7;file://%s%s\\033\\134" "$HOSTNAME" "$PWD"\'\n'
+        " export PROMPT_COMMAND='printf \"\\033]7;file://%s\\033\\134\" \"$PWD\"'"
+        "; printf '\\033[1A\\033[2K'\n"
     )
 
     def _bootstrap_follow(self, worker):
-        """Configure the shell to emit OSC 7 (bash) so the panel can follow it."""
+        """Configure the shell to emit OSC 7 so the panel can follow it.
+
+        Local/home terminals already emit OSC 7 via their environment, so nothing
+        is injected for them. Only SSH sessions - where we can't preset the remote
+        environment - get the one-time FOLLOW_CMD, which erases its own echo."""
         if worker is None or id(worker) in self._bootstrapped:
+            return
+        # Local (and serial) workers need no injected command; mark them done.
+        if worker.__class__.__name__ != "SSHWorker":
+            self._bootstrapped.add(id(worker))
             return
         if hasattr(worker, "send_data"):
             try:

@@ -330,6 +330,10 @@ class MainWindow(QMainWindow):
         elif isinstance(worker, LocalPTYWorker):
             # Local/home terminals show the local filesystem in the Files panel.
             self.sftp_browser.attach_local(worker, os.path.expanduser("~"))
+            # These emit OSC 7 (PROMPT_COMMAND is set in their environment), so
+            # the panel can follow the shell's directory - no injected command.
+            worker.cwd_changed.connect(
+                lambda path, w=worker: self.sftp_browser.on_terminal_cwd(w, path))
         worker.start()
 
     def _wire_terminal(self, tab, session_type, session_data):
