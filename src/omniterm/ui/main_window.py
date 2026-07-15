@@ -71,6 +71,15 @@ class MainWindow(QMainWindow):
         # Setup Keyboard Shortcuts
         self.setup_shortcuts()
 
+        # Control socket: lets `omniterm-cli ctl ...` drive this running instance.
+        self._control_server = None
+        if not os.environ.get("OMNITERM_NO_CONTROL"):
+            try:
+                from omniterm.core.control_server import ControlServer
+                self._control_server = ControlServer(self.handle_control_command, self)
+            except Exception:
+                self._control_server = None
+
         # Build the menus (attached to toolbar buttons below, not a menu bar)
         self.menuBar().hide()
 
@@ -1158,6 +1167,90 @@ class MainWindow(QMainWindow):
                         term.apply_settings(settings)
             elif hasattr(widget, "apply_settings"):
                 widget.apply_settings(settings)
+
+    # ---- control socket (omniterm-cli ctl ...) — runs on the GUI thread ----
+    def _ctl_tab(self, index):
+        """Resolve a tab index to a TerminalTab (first pane if it's a split)."""
+        if index is None:
+            raise ValueError("missing 'tab' index")
+        widget = self.tabs.widget(int(index))
+        if widget is None:
+            raise ValueError(f"no tab at index {index}")
+        terminals = getattr(widget, "terminals", None)
+        return terminals[0] if terminals else widget
+
+    def handle_control_command(self, cmd, args):
+        args = args or {}
+        if cmd == "ping":
+            return {"app": "omniterm", "version": self.app_version(),
+                    "tabs": self.tabs.count()}
+
+        if cmd == "list-tabs":
+            tabs = []
+            for i in range(self.tabs.count()):
+                w = self.tabs.widget(i)
+                terminals = getattr(w, "terminals", None)
+                if terminals is not None:
+                    ttype, sess = "split", None
+                else:
+                    ttype = getattr(w, "session_type", None)
+                    sess = (getattr(w, "session_data", {}) or {}).get("name")
+                tabs.append({"index": i, "title": self.tabs.tabText(i),
+                             "type": ttype, "session": sess})
+            return {"tabs": tabs}
+
+        if cmd == "open":
+            stype = args.get("type", "local")
+            if stype == "ssh":
+                from omniterm import cli
+                sess = cli.resolve_session(args.get("session"))
+                if not sess:
+                    return {"ok": False, "error": f"no session '{args.get('session')}'"}
+                if sess.get("type") != "ssh":
+                    return {"ok": False, "error": "session is not an SSH session"}
+                tab = self.create_terminal_tab("ssh", sess)
+            elif stype in ("local", "home"):
+                tab = self.create_terminal_tab(
+                    stype, {"name": stype.title(), "type": stype})
+            else:
+                return {"ok": False, "error": f"cannot open type '{stype}'"}
+            return {"index": self.tabs.indexOf(tab)}
+
+        if cmd in ("send-keys", "run"):
+            tab = self._ctl_tab(args.get("tab"))
+            text = args.get("text", "")
+            if cmd == "run" or args.get("enter"):
+                text += "\r"
+            if hasattr(tab, "_on_send"):
+                tab._on_send(text)
+            else:
+                return {"ok": False, "error": "tab cannot receive input"}
+            return {"sent": len(text)}
+
+        if cmd == "capture":
+            tab = self._ctl_tab(args.get("tab"))
+            term = getattr(tab, "terminal", None)
+            if term is None or not hasattr(term, "screen_text"):
+                return {"ok": False, "error": "tab has no terminal"}
+            return {"text": term.screen_text(scrollback=int(args.get("scrollback", 0)))}
+
+        if cmd == "focus-tab":
+            self.tabs.setCurrentIndex(int(args.get("tab")))
+            return {"focused": int(args.get("tab"))}
+
+        if cmd == "close-tab":
+            self.close_tab(int(args.get("tab")))
+            return {"closed": int(args.get("tab"))}
+
+        return {"ok": False, "error": f"unknown command '{cmd}'"}
+
+    def closeEvent(self, event):
+        if getattr(self, "_control_server", None) is not None:
+            try:
+                self._control_server.stop()
+            except Exception:
+                pass
+        super().closeEvent(event)
 
     GITHUB_URL = "https://github.com/fbobe321/omniterm"
 

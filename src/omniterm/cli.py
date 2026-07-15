@@ -21,6 +21,7 @@ import stat as statmod
 import sys
 
 from omniterm.core import config
+from omniterm.core import control
 
 
 # --------------------------------------------------------------------------- #
@@ -277,6 +278,67 @@ def cmd_sftp_put(args):
     _emit(res, args.json) if args.json else print(f"Uploaded → {res['remote']}")
 
 
+def _ctl(cmd, args):
+    try:
+        resp = control.send_command(cmd, args)
+    except control.ControlError as e:
+        raise CliError(str(e))
+    if not resp.get("ok", False):
+        raise CliError(resp.get("error", "control command failed"))
+    return resp
+
+
+def cmd_ctl_ping(args):
+    r = _ctl("ping", {})
+    if args.json:
+        _emit({k: v for k, v in r.items() if k != "ok"}, True)
+    else:
+        print(f"OmniTerm {r.get('version')} — {r.get('tabs')} tab(s) open")
+
+
+def cmd_ctl_list(args):
+    r = _ctl("list-tabs", {})
+    if args.json:
+        _emit(r["tabs"], True)
+    else:
+        for t in r["tabs"]:
+            extra = t.get("session") or t.get("type") or ""
+            print(f"[{t['index']}] {t['title']}  {extra}")
+
+
+def cmd_ctl_open(args):
+    a = {"type": args.type}
+    if args.type == "ssh":
+        a["session"] = args.session
+    r = _ctl("open", a)
+    _emit({"index": r["index"]}, True) if args.json else print(f"Opened tab {r['index']}")
+
+
+def cmd_ctl_send_keys(args):
+    r = _ctl("send-keys", {"tab": args.tab, "text": args.text, "enter": args.enter})
+    _emit(r, True) if args.json else print(f"Sent to tab {args.tab}")
+
+
+def cmd_ctl_run(args):
+    r = _ctl("run", {"tab": args.tab, "text": args.text})
+    _emit(r, True) if args.json else print(f"Ran on tab {args.tab}")
+
+
+def cmd_ctl_capture(args):
+    r = _ctl("capture", {"tab": args.tab, "scrollback": args.scrollback})
+    _emit({"text": r["text"]}, True) if args.json else print(r["text"])
+
+
+def cmd_ctl_focus(args):
+    _ctl("focus-tab", {"tab": args.tab})
+    _emit({"focused": args.tab}, True) if args.json else print(f"Focused tab {args.tab}")
+
+
+def cmd_ctl_close(args):
+    _ctl("close-tab", {"tab": args.tab})
+    _emit({"closed": args.tab}, True) if args.json else print(f"Closed tab {args.tab}")
+
+
 def cmd_repl(args):
     print("OmniTerm CLI — interactive mode. Type 'help' or 'quit'.")
     parser = build_parser()
@@ -369,6 +431,45 @@ def build_parser():
     f_put.add_argument("remote")
     f_put.add_argument("--json", action="store_true")
     f_put.set_defaults(func=cmd_sftp_put)
+
+    # ctl ...  (drive a running GUI over the control socket)
+    ct = sub.add_parser("ctl", help="control a running OmniTerm GUI")
+    ctsub = ct.add_subparsers(dest="subcommand")
+    c_ping = ctsub.add_parser("ping", help="check the running instance")
+    c_ping.add_argument("--json", action="store_true")
+    c_ping.set_defaults(func=cmd_ctl_ping)
+    c_list = ctsub.add_parser("list-tabs", help="list open tabs")
+    c_list.add_argument("--json", action="store_true")
+    c_list.set_defaults(func=cmd_ctl_list)
+    c_open = ctsub.add_parser("open", help="open a new tab")
+    c_open.add_argument("--type", choices=["local", "home", "ssh"], default="local")
+    c_open.add_argument("--session", help="saved session name (for --type ssh)")
+    c_open.add_argument("--json", action="store_true")
+    c_open.set_defaults(func=cmd_ctl_open)
+    c_sk = ctsub.add_parser("send-keys", help="send text to a tab")
+    c_sk.add_argument("--tab", type=int, required=True)
+    c_sk.add_argument("--text", required=True)
+    c_sk.add_argument("--enter", action="store_true", help="append Enter")
+    c_sk.add_argument("--json", action="store_true")
+    c_sk.set_defaults(func=cmd_ctl_send_keys)
+    c_run = ctsub.add_parser("run", help="send a command line + Enter to a tab")
+    c_run.add_argument("--tab", type=int, required=True)
+    c_run.add_argument("--text", required=True)
+    c_run.add_argument("--json", action="store_true")
+    c_run.set_defaults(func=cmd_ctl_run)
+    c_cap = ctsub.add_parser("capture", help="read a tab's visible text")
+    c_cap.add_argument("--tab", type=int, required=True)
+    c_cap.add_argument("--scrollback", type=int, default=0)
+    c_cap.add_argument("--json", action="store_true")
+    c_cap.set_defaults(func=cmd_ctl_capture)
+    c_focus = ctsub.add_parser("focus-tab", help="switch to a tab")
+    c_focus.add_argument("--tab", type=int, required=True)
+    c_focus.add_argument("--json", action="store_true")
+    c_focus.set_defaults(func=cmd_ctl_focus)
+    c_close = ctsub.add_parser("close-tab", help="close a tab")
+    c_close.add_argument("--tab", type=int, required=True)
+    c_close.add_argument("--json", action="store_true")
+    c_close.set_defaults(func=cmd_ctl_close)
 
     # repl
     rp = sub.add_parser("repl", help="interactive shell")

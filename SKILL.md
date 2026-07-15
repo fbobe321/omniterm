@@ -57,6 +57,29 @@ omniterm-cli sftp put <session> <local_file>  <remote_dest> [--json]
 `get`/`put` accept a directory destination (the basename is kept). Progress is
 printed to stderr unless `--json` is given.
 
+## Drive a running GUI (control socket)
+
+If OmniTerm's GUI is running, `omniterm-cli ctl ...` controls it live over a
+localhost socket (token-authenticated; the running app writes
+`~/.omniterm_ctl.json`, mode 0600). Use this to open tabs, type into them, and
+read their output.
+
+```bash
+omniterm-cli ctl ping                                   # is a GUI running?
+omniterm-cli ctl list-tabs --json
+omniterm-cli ctl open --type local                      # or --type home
+omniterm-cli ctl open --type ssh --session prod         # opens a saved session
+omniterm-cli ctl run    --tab 0 --text "uname -a"       # types the line + Enter
+omniterm-cli ctl send-keys --tab 0 --text "y" [--enter] # raw keystrokes
+omniterm-cli ctl capture --tab 0 [--scrollback 200]     # read the tab's text
+omniterm-cli ctl focus-tab --tab 0
+omniterm-cli ctl close-tab --tab 0
+```
+
+Typical agent loop: `ctl run --tab N --text "<cmd>"`, wait briefly, then
+`ctl capture --tab N` to read the result. (`exec` above is better when you just
+need a command's output and don't need the interactive session.)
+
 ## Interactive REPL
 
 ```bash

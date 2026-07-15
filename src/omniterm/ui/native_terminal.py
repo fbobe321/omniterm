@@ -550,6 +550,22 @@ class NativeTerminal(QWidget):
         return "".join((line[i].data if i in line and line[i].data else " ")
                        for i in range(self._cols))
 
+    def screen_text(self, scrollback=0):
+        """The visible screen as plain text (for control/automation capture).
+        `scrollback` prepends up to that many lines of history."""
+        def render(line):
+            return "".join((line[i].data if i in line and line[i].data else " ")
+                           for i in range(self._cols)).rstrip()
+        lines = []
+        if scrollback and hasattr(self._screen, "history"):
+            for line in list(self._screen.history.top)[-int(scrollback):]:
+                lines.append(render(line))
+        for y in range(self._rows):
+            lines.append(render(self._screen.buffer[y]))
+        while lines and not lines[-1]:
+            lines.pop()
+        return "\n".join(lines)
+
     def _reconstruct_line(self):
         """Best-effort recovery of the current command line.
 
