@@ -314,29 +314,53 @@ def cmd_ctl_open(args):
     _emit({"index": r["index"]}, True) if args.json else print(f"Opened tab {r['index']}")
 
 
+def _pane_args(args, base):
+    if getattr(args, "pane", None) is not None:
+        base["pane"] = args.pane
+    return base
+
+
 def cmd_ctl_send_keys(args):
-    r = _ctl("send-keys", {"tab": args.tab, "text": args.text, "enter": args.enter})
+    r = _ctl("send-keys", _pane_args(args, {"tab": args.tab, "text": args.text,
+                                            "enter": args.enter}))
     _emit(r, True) if args.json else print(f"Sent to tab {args.tab}")
 
 
 def cmd_ctl_run(args):
-    r = _ctl("run", {"tab": args.tab, "text": args.text})
+    r = _ctl("run", _pane_args(args, {"tab": args.tab, "text": args.text}))
     _emit(r, True) if args.json else print(f"Ran on tab {args.tab}")
 
 
 def cmd_ctl_capture(args):
-    r = _ctl("capture", {"tab": args.tab, "scrollback": args.scrollback})
+    r = _ctl("capture", _pane_args(args, {"tab": args.tab,
+                                          "scrollback": args.scrollback}))
     _emit({"text": r["text"]}, True) if args.json else print(r["text"])
 
 
 def cmd_ctl_focus(args):
-    _ctl("focus-tab", {"tab": args.tab})
-    _emit({"focused": args.tab}, True) if args.json else print(f"Focused tab {args.tab}")
+    r = _ctl("focus-tab", _pane_args(args, {"tab": args.tab}))
+    _emit(r, True) if args.json else print(f"Focused tab {args.tab}")
 
 
 def cmd_ctl_close(args):
     _ctl("close-tab", {"tab": args.tab})
     _emit({"closed": args.tab}, True) if args.json else print(f"Closed tab {args.tab}")
+
+
+def cmd_ctl_split(args):
+    try:
+        tabs = [int(x) for x in args.tabs.split(",") if x.strip() != ""]
+    except ValueError:
+        raise CliError("--tabs must be a comma-separated list of tab indices, e.g. 0,1")
+    r = _ctl("split", {"tabs": tabs, "orientation": args.orientation})
+    _emit(r, True) if args.json else \
+        print(f"Split into tab {r['index']} ({r['panes']} panes)")
+
+
+def cmd_ctl_unsplit(args):
+    r = _ctl("unsplit", {"tab": args.tab})
+    _emit(r, True) if args.json else \
+        print(f"Unsplit tab {args.tab} into {r['panes']} tabs")
 
 
 def cmd_repl(args):
@@ -446,30 +470,45 @@ def build_parser():
     c_open.add_argument("--session", help="saved session name (for --type ssh)")
     c_open.add_argument("--json", action="store_true")
     c_open.set_defaults(func=cmd_ctl_open)
-    c_sk = ctsub.add_parser("send-keys", help="send text to a tab")
+    c_sk = ctsub.add_parser("send-keys", help="send text to a tab (or pane)")
     c_sk.add_argument("--tab", type=int, required=True)
+    c_sk.add_argument("--pane", type=int, help="pane index within a split tab")
     c_sk.add_argument("--text", required=True)
     c_sk.add_argument("--enter", action="store_true", help="append Enter")
     c_sk.add_argument("--json", action="store_true")
     c_sk.set_defaults(func=cmd_ctl_send_keys)
-    c_run = ctsub.add_parser("run", help="send a command line + Enter to a tab")
+    c_run = ctsub.add_parser("run", help="send a command line + Enter to a tab/pane")
     c_run.add_argument("--tab", type=int, required=True)
+    c_run.add_argument("--pane", type=int, help="pane index within a split tab")
     c_run.add_argument("--text", required=True)
     c_run.add_argument("--json", action="store_true")
     c_run.set_defaults(func=cmd_ctl_run)
-    c_cap = ctsub.add_parser("capture", help="read a tab's visible text")
+    c_cap = ctsub.add_parser("capture", help="read a tab's (or pane's) visible text")
     c_cap.add_argument("--tab", type=int, required=True)
+    c_cap.add_argument("--pane", type=int, help="pane index within a split tab")
     c_cap.add_argument("--scrollback", type=int, default=0)
     c_cap.add_argument("--json", action="store_true")
     c_cap.set_defaults(func=cmd_ctl_capture)
-    c_focus = ctsub.add_parser("focus-tab", help="switch to a tab")
+    c_focus = ctsub.add_parser("focus-tab", help="switch to a tab (or focus a pane)")
     c_focus.add_argument("--tab", type=int, required=True)
+    c_focus.add_argument("--pane", type=int, help="pane index within a split tab")
     c_focus.add_argument("--json", action="store_true")
     c_focus.set_defaults(func=cmd_ctl_focus)
     c_close = ctsub.add_parser("close-tab", help="close a tab")
     c_close.add_argument("--tab", type=int, required=True)
     c_close.add_argument("--json", action="store_true")
     c_close.set_defaults(func=cmd_ctl_close)
+    c_split = ctsub.add_parser("split", help="combine open tabs into a split view")
+    c_split.add_argument("--tabs", required=True,
+                         help="comma-separated tab indices to combine, e.g. 0,1")
+    c_split.add_argument("--orientation", choices=["horizontal", "vertical"],
+                         default="horizontal")
+    c_split.add_argument("--json", action="store_true")
+    c_split.set_defaults(func=cmd_ctl_split)
+    c_unsplit = ctsub.add_parser("unsplit", help="split a combined tab back into tabs")
+    c_unsplit.add_argument("--tab", type=int, required=True)
+    c_unsplit.add_argument("--json", action="store_true")
+    c_unsplit.set_defaults(func=cmd_ctl_unsplit)
 
     # repl
     rp = sub.add_parser("repl", help="interactive shell")

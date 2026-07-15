@@ -74,7 +74,16 @@ omniterm-cli ctl send-keys --tab 0 --text "y" [--enter] # raw keystrokes
 omniterm-cli ctl capture --tab 0 [--scrollback 200]     # read the tab's text
 omniterm-cli ctl focus-tab --tab 0
 omniterm-cli ctl close-tab --tab 0
+
+# Split view: combine open tabs into panes, then target a pane with --pane
+omniterm-cli ctl split   --tabs 0,1 [--orientation horizontal|vertical]
+omniterm-cli ctl run     --tab 0 --pane 1 --text "htop"
+omniterm-cli ctl capture --tab 0 --pane 1
+omniterm-cli ctl unsplit --tab 0
 ```
+
+`list-tabs` reports a `panes` count per tab; `run`/`send-keys`/`capture`/
+`focus-tab` accept `--pane K` to target pane K of a split (default 0).
 
 Typical agent loop: `ctl run --tab N --text "<cmd>"`, wait briefly, then
 `ctl capture --tab N` to read the result. (`exec` above is better when you just

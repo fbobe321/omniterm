@@ -168,3 +168,39 @@ def test_mainwindow_control_verbs(qapp, monkeypatch):
         assert h("list-tabs", {})["tabs"] == []
     finally:
         win.close()
+
+
+def test_mainwindow_split_control(qapp, monkeypatch):
+    monkeypatch.setenv("OMNITERM_NO_CONTROL", "1")
+    from omniterm.ui.main_window import MainWindow
+    win = MainWindow()
+    h = win.handle_control_command
+    try:
+        h("open", {"type": "local"})
+        h("open", {"type": "local"})
+        assert len(h("list-tabs", {})["tabs"]) == 2
+
+        # needs >= 2 distinct tabs
+        assert h("split", {"tabs": [0]})["ok"] is False
+
+        res = h("split", {"tabs": [0, 1], "orientation": "horizontal"})
+        assert res["panes"] == 2
+        sidx = res["index"]
+        tabs = h("list-tabs", {})["tabs"]
+        assert len(tabs) == 1 and tabs[0]["type"] == "split" and tabs[0]["panes"] == 2
+
+        # per-pane targeting
+        assert isinstance(h("capture", {"tab": sidx, "pane": 1})["text"], str)
+        assert h("send-keys", {"tab": sidx, "pane": 1, "text": "x"})["sent"] == 1
+        with pytest.raises(Exception):
+            h("capture", {"tab": sidx, "pane": 5})     # no such pane
+
+        # splitting an already-split tab is rejected
+        assert h("split", {"tabs": [sidx, sidx]})["ok"] is False
+
+        un = h("unsplit", {"tab": sidx})
+        assert un["panes"] == 2
+        assert len(h("list-tabs", {})["tabs"]) == 2    # back to two tabs
+        assert h("unsplit", {"tab": 0})["ok"] is False  # not a split anymore
+    finally:
+        win.close()

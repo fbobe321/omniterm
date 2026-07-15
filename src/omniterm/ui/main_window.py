@@ -1169,15 +1169,23 @@ class MainWindow(QMainWindow):
                 widget.apply_settings(settings)
 
     # ---- control socket (omniterm-cli ctl ...) — runs on the GUI thread ----
-    def _ctl_tab(self, index):
-        """Resolve a tab index to a TerminalTab (first pane if it's a split)."""
+    def _ctl_tab(self, index, pane=None):
+        """Resolve a tab index (and optional pane) to a TerminalTab."""
         if index is None:
             raise ValueError("missing 'tab' index")
         widget = self.tabs.widget(int(index))
         if widget is None:
             raise ValueError(f"no tab at index {index}")
         terminals = getattr(widget, "terminals", None)
-        return terminals[0] if terminals else widget
+        if terminals is not None:                 # split tab
+            p = 0 if pane is None else int(pane)
+            if p < 0 or p >= len(terminals):
+                raise ValueError(f"tab {index} has no pane {p} "
+                                 f"(it has {len(terminals)})")
+            return terminals[p]
+        if pane not in (None, 0):
+            raise ValueError(f"tab {index} is not split (no pane {pane})")
+        return widget
 
     def handle_control_command(self, cmd, args):
         args = args or {}
@@ -1191,12 +1199,13 @@ class MainWindow(QMainWindow):
                 w = self.tabs.widget(i)
                 terminals = getattr(w, "terminals", None)
                 if terminals is not None:
-                    ttype, sess = "split", None
+                    ttype, sess, panes = "split", None, len(terminals)
                 else:
                     ttype = getattr(w, "session_type", None)
                     sess = (getattr(w, "session_data", {}) or {}).get("name")
+                    panes = 1
                 tabs.append({"index": i, "title": self.tabs.tabText(i),
-                             "type": ttype, "session": sess})
+                             "type": ttype, "session": sess, "panes": panes})
             return {"tabs": tabs}
 
         if cmd == "open":
@@ -1217,7 +1226,7 @@ class MainWindow(QMainWindow):
             return {"index": self.tabs.indexOf(tab)}
 
         if cmd in ("send-keys", "run"):
-            tab = self._ctl_tab(args.get("tab"))
+            tab = self._ctl_tab(args.get("tab"), args.get("pane"))
             text = args.get("text", "")
             if cmd == "run" or args.get("enter"):
                 text += "\r"
@@ -1228,19 +1237,59 @@ class MainWindow(QMainWindow):
             return {"sent": len(text)}
 
         if cmd == "capture":
-            tab = self._ctl_tab(args.get("tab"))
+            tab = self._ctl_tab(args.get("tab"), args.get("pane"))
             term = getattr(tab, "terminal", None)
             if term is None or not hasattr(term, "screen_text"):
                 return {"ok": False, "error": "tab has no terminal"}
             return {"text": term.screen_text(scrollback=int(args.get("scrollback", 0)))}
 
         if cmd == "focus-tab":
-            self.tabs.setCurrentIndex(int(args.get("tab")))
-            return {"focused": int(args.get("tab"))}
+            idx = int(args.get("tab"))
+            self.tabs.setCurrentIndex(idx)
+            pane = args.get("pane")
+            if pane is not None:
+                term = getattr(self._ctl_tab(idx, pane), "terminal", None)
+                if term is not None:
+                    term.setFocus()
+            return {"focused": idx, "pane": pane}
 
         if cmd == "close-tab":
             self.close_tab(int(args.get("tab")))
             return {"closed": int(args.get("tab"))}
+
+        if cmd == "split":
+            indices = args.get("tabs")
+            if not isinstance(indices, list) or len(indices) < 2:
+                return {"ok": False, "error": "split needs 'tabs': >=2 tab indices"}
+            widgets, seen = [], set()
+            for i in indices:
+                w = self.tabs.widget(int(i))
+                if w is None:
+                    return {"ok": False, "error": f"no tab at index {i}"}
+                if getattr(w, "terminals", None) is not None:
+                    return {"ok": False, "error": f"tab {i} is already split"}
+                if not hasattr(w, "worker"):
+                    return {"ok": False, "error": f"tab {i} is not a terminal"}
+                if id(w) not in seen:
+                    seen.add(id(w))
+                    widgets.append(w)
+            if len(widgets) < 2:
+                return {"ok": False, "error": "need at least 2 distinct tabs"}
+            if len(widgets) > 4:
+                return {"ok": False, "error": "at most 4 panes"}
+            orientation = args.get("orientation", "horizontal")
+            container = self.combine_tabs_into_split(len(widgets), widgets, orientation)
+            return {"index": self.tabs.indexOf(container),
+                    "panes": len(container.terminals)}
+
+        if cmd == "unsplit":
+            idx = int(args.get("tab"))
+            w = self.tabs.widget(idx)
+            if w is None or getattr(w, "terminals", None) is None:
+                return {"ok": False, "error": f"tab {idx} is not a split"}
+            panes = len(w.terminals)
+            self.unsplit_tab(idx)
+            return {"unsplit": idx, "panes": panes}
 
         return {"ok": False, "error": f"unknown command '{cmd}'"}
 
