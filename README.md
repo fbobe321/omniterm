@@ -67,8 +67,23 @@ omniterm-cli sftp put prod ./build.tar.gz /tmp/
 omniterm-cli repl
 ```
 
-For agent use, a [`SKILL.md`](SKILL.md) describes the interface for discovery.
-The CLI imports no PyQt, so it runs anywhere — no display required.
+### Driving a running GUI
+
+If the OmniTerm window is open, `omniterm-cli ctl …` controls it live over a
+token-authenticated localhost socket:
+
+```bash
+omniterm-cli ctl ping
+omniterm-cli ctl open --type ssh --session prod
+omniterm-cli ctl run     --tab 0 --text "uname -a"
+omniterm-cli ctl capture --tab 0            # read the tab's output back
+omniterm-cli ctl list-tabs --json
+```
+
+Set `OMNITERM_NO_CONTROL=1` to disable the control socket.
+
+For agent use, a [`SKILL.md`](SKILL.md) describes the whole interface for
+discovery. The CLI imports no PyQt, so it runs anywhere — no display required.
 
 ## Development
 
