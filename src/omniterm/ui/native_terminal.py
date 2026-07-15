@@ -486,13 +486,50 @@ class NativeTerminal(QWidget):
         menu.exec(event.globalPos())
 
     # ---- scrollback ----
+    _MIN_FONT = 5.0
+    _MAX_FONT = 48.0
+
     def wheelEvent(self, event):
+        # Ctrl + wheel zooms the font (like MobaXterm / browsers).
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta:
+                self._adjust_font_size(1.0 if delta > 0 else -1.0)
+            event.accept()
+            return
         if not hasattr(self._screen, "history"):
             return  # no scrollback on the alternate screen
         steps = event.angleDelta().y() / 120.0
         maxscroll = len(self._screen.history.top)
         self._scroll = int(max(0, min(maxscroll, self._scroll + steps * 3)))
         self.update()
+
+    def _adjust_font_size(self, delta):
+        cur = self._font.pointSizeF()
+        new = max(self._MIN_FONT, min(self._MAX_FONT, cur + delta))
+        if abs(new - cur) < 0.1:
+            return
+        self._set_font(self._font.family(), new)
+        self._color_cache.clear()
+        self._recompute_size()   # new cell size -> new cols/rows -> PTY resize
+        self.update()
+        self._schedule_font_persist(new)
+
+    def _schedule_font_persist(self, size):
+        # Remember the chosen size (debounced) so new terminals match.
+        self._pending_font_size = size
+        if not hasattr(self, "_font_persist_timer"):
+            self._font_persist_timer = QTimer(self)
+            self._font_persist_timer.setSingleShot(True)
+            self._font_persist_timer.timeout.connect(self._persist_font_size)
+        self._font_persist_timer.start(500)
+
+    def _persist_font_size(self):
+        try:
+            from ..core import config
+            config.set_terminal_settings({"fontSize": round(self._pending_font_size, 1)})
+        except Exception:
+            pass
 
     # ---- shadow predictor: command-line reconstruction (Phase 0 spike) ----
     # The remote shell owns line editing; we only see echoed output. To predict

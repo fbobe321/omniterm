@@ -223,6 +223,39 @@ def test_scroll_stays_pinned_when_output_arrives(qapp):
     assert t._scroll == 35             # offset advanced by the 20 new lines
 
 
+def test_ctrl_wheel_zooms_font(qapp):
+    """Ctrl+wheel changes font size (and the grid); plain wheel does not."""
+    from omniterm.ui.native_terminal import NativeTerminal
+    from PyQt6.QtGui import QWheelEvent
+    from PyQt6.QtCore import QPointF, QPoint
+
+    def wheel(t, dy, ctrl):
+        mods = (Qt.KeyboardModifier.ControlModifier if ctrl
+                else Qt.KeyboardModifier.NoModifier)
+        t.wheelEvent(QWheelEvent(QPointF(10, 10), QPointF(10, 10), QPoint(0, 0),
+                                 QPoint(0, dy), Qt.MouseButton.NoButton, mods,
+                                 Qt.ScrollPhase.NoScrollPhase, False))
+
+    t = NativeTerminal()
+    t.resize(800, 480)
+    size0, cols0 = t._font.pointSizeF(), t._cols
+    wheel(t, 120, ctrl=True)
+    assert t._font.pointSizeF() == size0 + 1 and t._cols < cols0   # zoomed in
+    wheel(t, -120, ctrl=True)
+    assert t._font.pointSizeF() == size0                            # back to start
+    # clamps
+    for _ in range(60):
+        wheel(t, -120, ctrl=True)
+    assert t._font.pointSizeF() == t._MIN_FONT
+    for _ in range(80):
+        wheel(t, 120, ctrl=True)
+    assert t._font.pointSizeF() == t._MAX_FONT
+    # plain wheel leaves the font alone
+    size = t._font.pointSizeF()
+    wheel(t, 120, ctrl=False)
+    assert t._font.pointSizeF() == size
+
+
 def test_paste_normalizes_newlines(qapp):
     """A multi-line paste sends carriage returns (what Enter sends), not \\n."""
     from omniterm.ui.native_terminal import NativeTerminal
