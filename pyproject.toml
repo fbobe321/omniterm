@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "omniterm"
-version = "0.1.74"
+version = "0.1.75"
 description = "A cross-platform terminal: SSH, serial, and local sessions with an integrated SFTP browser."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -46,6 +46,7 @@ Issues = "https://github.com/fbobe321/omniterm/issues"
 
 [project.scripts]
 omniterm = "omniterm.main:main"
+omniterm-cli = "omniterm.cli:main"
 
 [project.gui-scripts]
 omniterm-gui = "omniterm.main:main"
