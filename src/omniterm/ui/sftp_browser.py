@@ -1,11 +1,12 @@
 from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView, QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QLineEdit, QCompleter, QProgressDialog, QMessageBox, QToolButton
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QAction, QDrag, QDesktopServices
-from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl, QSize, QStringListModel, QFileSystemWatcher, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl, QSize, QStringListModel, QFileSystemWatcher, QTimer, QThread
 import os
 import stat
 import posixpath
 import tempfile
 import time
+import threading
 import shutil
 from omniterm.core.config import get_group_folders_first, set_group_folders_first
 from omniterm.core.transfer import TransferWorker
@@ -83,6 +84,72 @@ class LocalFSAdapter:
 
     def close(self):
         pass
+
+class SFTPLister(QThread):
+    """Lists directories off the GUI thread so a slow or dropped connection can
+    never freeze the UI. One per connection, serialized (latest request wins).
+
+    For remote sessions it opens its OWN dedicated SFTP channel from the SSH
+    transport, so it never touches the browser's GUI-thread SFTP client - no
+    locks, no races (mirrors what TransferWorker does). Local sessions use their
+    own LocalFSAdapter, which is thread-safe (os.scandir)."""
+
+    listed = pyqtSignal(int, str, object)   # req_id, path, entries (list of attrs)
+    failed = pyqtSignal(int, str, str)      # req_id, path, error message
+
+    def __init__(self, transport=None, adapter=None, parent=None):
+        super().__init__(parent)
+        self._transport = transport         # remote: paramiko Transport
+        self._adapter = adapter             # local: a LocalFSAdapter
+        self._sftp = adapter                # remote client opened lazily in run()
+        self._cv = threading.Condition()
+        self._pending = None                # (req_id, path) waiting to be listed
+        self._alive = True
+
+    def request(self, req_id, path):
+        """Queue a listing; a newer request supersedes any not-yet-started one."""
+        with self._cv:
+            self._pending = (req_id, path)
+            self._cv.notify()
+
+    def stop(self):
+        with self._cv:
+            self._alive = False
+            self._cv.notify()
+
+    def _client(self):
+        if self._sftp is not None:
+            return self._sftp
+        import paramiko
+        client = paramiko.SFTPClient.from_transport(self._transport)
+        try:
+            client.get_channel().settimeout(15)
+        except Exception:
+            pass
+        self._sftp = client
+        return client
+
+    def run(self):
+        while True:
+            with self._cv:
+                while self._alive and self._pending is None:
+                    self._cv.wait()
+                if not self._alive:
+                    break
+                req_id, path = self._pending
+                self._pending = None
+            try:
+                entries = self._client().listdir_attr(path)
+                self.listed.emit(req_id, path, entries)
+            except Exception as e:
+                self.failed.emit(req_id, path, str(e))
+        # Close the dedicated remote channel (local adapters have a no-op close).
+        if self._transport is not None and self._sftp is not None:
+            try:
+                self._sftp.close()
+            except Exception:
+                pass
+
 
 # Custom item data roles
 PATH_ROLE = 32      # full remote path for the entry
@@ -276,6 +343,7 @@ class SFTPBrowser(QDockWidget):
         self._active_state = None
         self._latest_cwd = {}    # id(worker) -> last reported shell cwd
         self._bootstrapped = set()  # workers we've configured for OSC 7
+        self._list_req = 0       # monotonic id; only the latest listing is applied
 
         # Background transfers + double-click-to-edit sync.
         self._transfer = None            # active TransferWorker
@@ -286,23 +354,35 @@ class SFTPBrowser(QDockWidget):
         self._prompting = set()          # local paths with an open overwrite prompt
 
     def _ensure_connected(self):
+        # Non-blocking presence check only. Never probe the network on the GUI
+        # thread - a dead connection would hang the whole app. Directory listings
+        # go through the async lister; user-initiated transfers surface their own
+        # errors (and are bounded by the SFTP channel timeout).
         if self.sftp is None:
             self.error_occurred.emit("Not connected to any session")
             return False
-        try:
-            # Simple heartbeat check: try to list the current directory
-            self.sftp.listdir(self.current_path)
-            return True
-        except Exception:
-            self.sftp = None  # Mark as disconnected
-            self.model.clear()
-            self.error_occurred.emit("SFTP session lost. Please reconnect.")
-            return False
+        return True
+
+    def _make_lister(self, state, transport=None, adapter=None):
+        """Create, wire, and start the async directory lister for a connection."""
+        lister = SFTPLister(transport=transport, adapter=adapter, parent=self)
+        lister.listed.connect(
+            lambda rid, path, entries, st=state: self._on_listed(st, rid, path, entries))
+        lister.failed.connect(
+            lambda rid, path, err, st=state: self._on_list_failed(st, rid, path, err))
+        lister.finished.connect(lister.deleteLater)
+        lister.start()
+        state["lister"] = lister
 
     def attach_sftp(self, ssh_worker, sftp, home_path="."):
         """Register a ready SFTP session (opened by the worker thread) for a
         worker and, if its tab is the active one, display it."""
         state = {"sftp": sftp, "path": home_path or ".", "worker": ssh_worker}
+        try:
+            transport = sftp.get_channel().get_transport()
+        except Exception:
+            transport = None
+        self._make_lister(state, transport=transport)
         self._states[id(ssh_worker)] = state
         if ssh_worker is self.active_worker:
             self._activate_state(state)
@@ -312,6 +392,8 @@ class SFTPBrowser(QDockWidget):
         adapter = LocalFSAdapter()
         path = adapter.normalize(start_path or "~")
         state = {"sftp": adapter, "path": path, "worker": worker}
+        # The lister lists on its own LocalFSAdapter (thread-safe), off the GUI thread.
+        self._make_lister(state, adapter=LocalFSAdapter())
         self._states[id(worker)] = state
         if worker is self.active_worker:
             self._activate_state(state)
@@ -371,6 +453,10 @@ class SFTPBrowser(QDockWidget):
         self._active_state = state
         self.sftp = state["sftp"]
         self._completer_dir = None  # refresh path completion for the new connection
+        # Clear the previous tab's files now; the async listing repopulates it
+        # (so we don't show one connection's files under another while loading).
+        self.model.clear()
+        self.model.setHorizontalHeaderLabels(["Name", "Size", "Modified"])
         # When following, jump to the shell's last-known dir for this worker
         path = state["path"]
         if self.follow_check.isChecked():
@@ -399,6 +485,9 @@ class SFTPBrowser(QDockWidget):
         self._bootstrapped.discard(id(worker))
         state = self._states.pop(id(worker), None)
         if state is not None:
+            lister = state.get("lister")
+            if lister is not None:
+                lister.stop()  # exits its loop; deleteLater fires on finished
             try:
                 state["sftp"].close()
             except Exception:
@@ -476,18 +565,27 @@ class SFTPBrowser(QDockWidget):
             return ""
 
     def list_directory(self, path):
-        """Replace the view with the contents of `path` (a single directory level)."""
-        if not self._ensure_connected():
+        """Request the contents of `path` from the async lister (off the GUI
+        thread). The view is repopulated later, in _on_listed, so a slow or
+        dropped connection never blocks the UI."""
+        state = self._active_state
+        if state is None or state.get("lister") is None:
             return
-        try:
-            entries = self.sftp.listdir_attr(path)
-        except Exception as e:
-            self.error_occurred.emit(f"SFTP List Error: {e}")
-            return
+        self._list_req += 1
+        state["lister"].request(self._list_req, path)
 
+    def _on_list_failed(self, state, req_id, path, err):
+        # Ignore stale results (superseded request or the user switched tabs).
+        if state is not self._active_state or req_id != self._list_req:
+            return
+        self.error_occurred.emit(f"SFTP List Error: {err}")
+
+    def _on_listed(self, state, req_id, path, entries):
+        """Populate the view from a completed async listing, unless it's stale."""
+        if state is not self._active_state or req_id != self._list_req:
+            return
         self.current_path = path
-        if self._active_state is not None:
-            self._active_state["path"] = path  # remember location per connection
+        state["path"] = path  # remember location per connection
         self.path_edit.setText(path)
         self.model.clear()
         self.model.setHorizontalHeaderLabels(["Name", "Size", "Modified"])
