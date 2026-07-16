@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView, QWidget, QVBoxLayout, QCheckBox, QLineEdit, QCompleter, QProgressDialog, QMessageBox
+from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView, QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QLineEdit, QCompleter, QProgressDialog, QMessageBox, QToolButton
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QAction, QDrag, QDesktopServices
 from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl, QSize, QStringListModel, QFileSystemWatcher, QTimer
 import os
@@ -239,12 +239,27 @@ class SFTPBrowser(QDockWidget):
             "one-time bash prompt setup (sent invisibly, nothing to clean up).")
         self.follow_check.toggled.connect(self._on_follow_toggled)
 
+        # Refresh button, next to the follow checkbox: reload the current folder.
+        self.refresh_btn = QToolButton()
+        self.refresh_btn.setText("↻")   # ↻ clockwise arrow
+        self.refresh_btn.setToolTip("Refresh the file list")
+        self.refresh_btn.setAutoRaise(True)
+        self.refresh_btn.clicked.connect(self.refresh)
+
+        controls = QWidget()
+        hbox = QHBoxLayout(controls)
+        hbox.setContentsMargins(0, 0, 0, 0)
+        hbox.setSpacing(4)
+        hbox.addWidget(self.follow_check)
+        hbox.addStretch(1)
+        hbox.addWidget(self.refresh_btn)
+
         container = QWidget()
         vbox = QVBoxLayout(container)
         vbox.setContentsMargins(0, 0, 0, 0)
         vbox.setSpacing(2)
         vbox.addWidget(self.path_edit)
-        vbox.addWidget(self.follow_check)
+        vbox.addWidget(controls)
         vbox.addWidget(self.tree_view)
         self.setWidget(container)
 

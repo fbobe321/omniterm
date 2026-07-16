@@ -58,6 +58,14 @@ class SSHWorker(QThread):
             self.channel = self.client.invoke_shell(
                 term='xterm-256color', width=self.term_cols, height=self.term_rows)
 
+            # Keepalive so a dropped/half-open link is detected in seconds. Without
+            # it, a dead peer isn't noticed until the OS TCP timeout, and any
+            # blocking SFTP call on the GUI thread hangs that whole time (the app
+            # "freezes until it says disconnected").
+            transport = self.client.get_transport()
+            if transport is not None:
+                transport.set_keepalive(15)
+
             # X11 forwarding: run remote GUI apps on the local X server
             if self.session_data.get("x11"):
                 self._setup_x11()
@@ -69,6 +77,14 @@ class SSHWorker(QThread):
             # sequentially in this thread avoids that.
             try:
                 sftp = self.client.open_sftp()
+                # Bound blocking SFTP calls (listdir/stat/normalize run on the GUI
+                # thread) so a dying connection surfaces as an error quickly
+                # instead of freezing the UI. Applies per request, so large
+                # transfers - many quick requests - are unaffected.
+                try:
+                    sftp.get_channel().settimeout(15)
+                except Exception:
+                    pass
                 try:
                     home_path = sftp.normalize('.')
                 except Exception:

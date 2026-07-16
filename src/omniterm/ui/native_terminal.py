@@ -46,7 +46,10 @@ class NativeTerminal(QWidget):
 
         self._cols, self._rows = 80, 24
         self._scroll = 0                      # lines scrolled up (0 = bottom)
-        self._sel_anchor = None               # (row, col) in visible coords
+        # Selection endpoints are stored in *document* coords (an index into
+        # history + the live buffer), so they stay put while the view scrolls -
+        # which lets a drag-selection span more than one screen of scrollback.
+        self._sel_anchor = None               # (doc_row, col)
         self._sel_head = None
         self._color_cache = {}
 
@@ -88,6 +91,14 @@ class NativeTerminal(QWidget):
         self._blink.setInterval(600)
         self._blink.timeout.connect(self._toggle_cursor)
         self._blink.start()
+
+        # Auto-scroll while drag-selecting past the top/bottom edge, so a
+        # selection can be dragged across earlier/later pages of scrollback.
+        self._autoscroll = QTimer(self)
+        self._autoscroll.setInterval(40)
+        self._autoscroll.timeout.connect(self._autoscroll_tick)
+        self._autoscroll_dir = 0              # +1 = older (up), -1 = newer (down)
+        self._last_drag_pos = None            # latest drag position, for the timer
 
     # ---- appearance ----
     def _set_font(self, family, size):
@@ -132,6 +143,12 @@ class NativeTerminal(QWidget):
         self._update_prediction()
         if self._predict_debug:
             self._debug_predict()
+
+        # Output usually means the cursor just moved (e.g. every keystroke in
+        # vi). Make it solid and restart the blink phase so it's visible on the
+        # new spot immediately, instead of possibly sitting in the "off" half of
+        # an independent blink cycle for up to a full interval.
+        self._wake_cursor()
 
         if self._scroll != 0 and hasattr(self._screen, "history"):
             # User is scrolled up reading history: keep the view pinned to the
@@ -192,6 +209,12 @@ class NativeTerminal(QWidget):
         cy = self._screen.cursor.y
         self.update(0, int(cy * self._ch), self.width(), int(self._ch) + 2)
 
+    def _wake_cursor(self):
+        """Force the cursor solid and restart its blink cycle, so it's shown at
+        once wherever it just moved (used on every chunk of shell output)."""
+        self._cursor_on = True
+        self._blink.start()  # restarting resets the 600ms phase
+
     # ---- sizing ----
     def resizeEvent(self, event):
         self._recompute_size()
@@ -250,17 +273,20 @@ class NativeTerminal(QWidget):
         base_font = self._font
 
         span = self._selection_span()
+        doc_top = self._doc_top()
         for row in range(row_start, row_end):
             line = lines[row]
             y = row * self._ch
             # selected column range for this row (folded into the cell bg so
-            # text renders on top and stays readable)
+            # text renders on top and stays readable). The span is in document
+            # coords, so map this visible row to its document row to compare.
             sel_cs = sel_ce = -1
             if span:
+                doc = doc_top + row
                 (sr0, sc0), (sr1, sc1) = span
-                if sr0 <= row <= sr1:
-                    sel_cs = sc0 if row == sr0 else 0
-                    sel_ce = sc1 if row == sr1 else self._cols
+                if sr0 <= doc <= sr1:
+                    sel_cs = sc0 if doc == sr0 else 0
+                    sel_ce = sc1 if doc == sr1 else self._cols
             col = 0
             while col < self._cols:
                 start_col = col
@@ -353,15 +379,38 @@ class NativeTerminal(QWidget):
             return None
         return (a, b) if a <= b else (b, a)
 
+    # ---- document coordinates (stable across scrolling) ----
+    def _doc_lines(self):
+        """The whole document as a list of line dicts: scrollback history
+        followed by the current on-screen buffer."""
+        buf = self._screen.buffer
+        rows = [buf[y] for y in range(self._rows)]
+        if hasattr(self._screen, "history"):
+            return list(self._screen.history.top) + rows
+        return rows
+
+    def _doc_top(self):
+        """Document index of the top visible row for the current scroll offset."""
+        hist = len(self._screen.history.top) if hasattr(self._screen, "history") else 0
+        return max(0, hist - self._scroll)
+
     # ---- mouse (selection + copy-on-select) ----
     def _cell_at(self, pos):
         col = max(0, min(self._cols, int(pos.x() / self._cw)))
         row = max(0, min(self._rows - 1, int(pos.y() / self._ch)))
         return (row, col)
 
+    def _cell_at_doc(self, pos):
+        """Mouse position -> (doc_row, col). The visible row is clamped to the
+        widget, so dragging above/below the edge sticks to the first/last row."""
+        row, col = self._cell_at(pos)
+        return (self._doc_top() + row, col)
+
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            self._sel_anchor = self._cell_at(event.position())
+            self._stop_autoscroll()
+            self._last_drag_pos = event.position()
+            self._sel_anchor = self._cell_at_doc(event.position())
             self._sel_head = self._sel_anchor
             self.update()
         elif event.button() == Qt.MouseButton.MiddleButton:
@@ -370,16 +419,66 @@ class NativeTerminal(QWidget):
 
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.MouseButton.LeftButton and self._sel_anchor is not None:
-            self._sel_head = self._cell_at(event.position())
+            pos = event.position()
+            self._last_drag_pos = pos
+            self._sel_head = self._cell_at_doc(pos)
+            self._update_autoscroll(pos)
             self.update()
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            self._stop_autoscroll()
             self._copy_selection()
 
+    # ---- auto-scroll while drag-selecting past an edge ----
+    def _update_autoscroll(self, pos):
+        """Start/stop edge auto-scroll based on where the drag is. Dragging into
+        (or past) the top or bottom of the widget scrolls history under the
+        selection; releasing or dragging back inside stops it."""
+        if not hasattr(self._screen, "history"):
+            self._stop_autoscroll()
+            return
+        margin = self._ch  # within one row of an edge (or beyond) triggers it
+        y = pos.y()
+        if y < margin:
+            self._autoscroll_dir = 1          # reveal older lines
+        elif y > self.height() - margin:
+            self._autoscroll_dir = -1         # reveal newer lines
+        else:
+            self._stop_autoscroll()
+            return
+        if not self._autoscroll.isActive():
+            self._autoscroll.start()
+
+    def _stop_autoscroll(self):
+        self._autoscroll_dir = 0
+        self._autoscroll.stop()
+
+    def _autoscroll_tick(self):
+        if self._autoscroll_dir == 0 or self._sel_anchor is None \
+                or not hasattr(self._screen, "history"):
+            self._stop_autoscroll()
+            return
+        maxscroll = len(self._screen.history.top)
+        step = 2
+        new = self._scroll + (step if self._autoscroll_dir > 0 else -step)
+        new = max(0, min(maxscroll, new))
+        if new == self._scroll:
+            self._stop_autoscroll()           # reached the top/bottom of history
+            return
+        self._scroll = new
+        # Extend the selection head to the edge cell the mouse is held at; as the
+        # view scrolled, that cell now maps to a new document row.
+        if self._last_drag_pos is not None:
+            self._sel_head = self._cell_at_doc(self._last_drag_pos)
+        self.update()
+
     def mouseDoubleClickEvent(self, event):
-        row, col = self._cell_at(event.position())
-        line = self._visible_lines()[row]
+        doc_row, col = self._cell_at_doc(event.position())
+        lines = self._doc_lines()
+        if doc_row < 0 or doc_row >= len(lines):
+            return
+        line = lines[doc_row]
 
         def is_word(c):
             return c.isalnum() or c in "_.-/~"
@@ -392,8 +491,8 @@ class NativeTerminal(QWidget):
         end = col
         while end < self._cols - 1 and is_word(text[end + 1]):
             end += 1
-        self._sel_anchor = (row, start)
-        self._sel_head = (row, end + 1)
+        self._sel_anchor = (doc_row, start)
+        self._sel_head = (doc_row, end + 1)
         self.update()
         self._copy_selection()
 
@@ -402,9 +501,12 @@ class NativeTerminal(QWidget):
         if not span:
             return ""
         (r0, c0), (r1, c1) = span
-        lines = self._visible_lines()
+        lines = self._doc_lines()
+        n = len(lines)
         out = []
         for row in range(r0, r1 + 1):
+            if row < 0 or row >= n:
+                continue
             line = lines[row]
             cs = c0 if row == r0 else 0
             ce = c1 if row == r1 else self._cols
@@ -422,12 +524,17 @@ class NativeTerminal(QWidget):
 
     def _extend_keyboard_selection(self, key):
         # Keyboard text selection (Shift+Arrow/Home/End), seeded at the cursor.
+        # Works in document coords, kept within the visible page.
         if self._sel_anchor is None or self._sel_head is None:
             if self._scroll != 0:
                 self._scroll = 0
-            origin = (self._screen.cursor.y, self._screen.cursor.x)
+            hist = len(self._screen.history.top) \
+                if hasattr(self._screen, "history") else 0
+            origin = (hist + self._screen.cursor.y, self._screen.cursor.x)
             self._sel_anchor = origin
             self._sel_head = origin
+        top = self._doc_top()
+        bot = top + self._rows - 1
         row, col = self._sel_head
         if key == Qt.Key.Key_Left:
             col -= 1
@@ -443,16 +550,16 @@ class NativeTerminal(QWidget):
             col = self._cols
         # wrap horizontal movement across line boundaries
         if col < 0:
-            if row > 0:
+            if row > top:
                 row, col = row - 1, self._cols
             else:
                 col = 0
         elif col > self._cols:
-            if row < self._rows - 1:
+            if row < bot:
                 row, col = row + 1, 0
             else:
                 col = self._cols
-        row = max(0, min(self._rows - 1, row))
+        row = max(top, min(bot, row))
         self._sel_head = (row, col)
         self._copy_selection()  # copy-on-select, matching mouse behaviour
         self.update()
