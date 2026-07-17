@@ -87,6 +87,7 @@ class NativeTerminal(QWidget):
 
         # cursor blink
         self._cursor_on = True
+        self._cursor_row = 0         # row we last drew the cursor on (to erase it)
         self._blink = QTimer(self)
         self._blink.setInterval(600)
         self._blink.timeout.connect(self._toggle_cursor)
@@ -210,10 +211,19 @@ class NativeTerminal(QWidget):
         self.update(0, int(cy * self._ch), self.width(), int(self._ch) + 2)
 
     def _wake_cursor(self):
-        """Force the cursor solid and restart its blink cycle, so it's shown at
-        once wherever it just moved (used on every chunk of shell output)."""
+        """Keep the cursor visible as it moves. A pure cursor move (arrow keys in
+        vi, say) changes no line content, so pyte marks nothing dirty and feed()'s
+        dirty-based repaint would skip the cursor entirely - it would only reappear
+        on the next 600ms blink tick. So force it solid, restart the blink phase,
+        and explicitly repaint both the row it left and the row it moved to (full
+        width, which also covers horizontal moves within a row)."""
         self._cursor_on = True
-        self._blink.start()  # restarting resets the 600ms phase
+        self._blink.start()  # restart so it stays solid while actively moving
+        cy = self._screen.cursor.y
+        for y in {self._cursor_row, cy}:
+            if 0 <= y < self._rows:
+                self.update(0, int(y * self._ch), self.width(), int(self._ch) + 2)
+        self._cursor_row = cy
 
     # ---- sizing ----
     def resizeEvent(self, event):
