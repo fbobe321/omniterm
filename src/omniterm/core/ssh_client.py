@@ -249,8 +249,14 @@ class SSHWorker(QThread):
                 self.error_occurred.emit(f"Tunnel Error: {str(e)}")
 
     def send_data(self, data):
-        if hasattr(self, 'channel') and self.channel:
-            self.channel.send(data)
+        # Called from the GUI thread; sending on a dropped connection raises,
+        # and an exception escaping a Qt slot aborts the process.
+        chan = getattr(self, 'channel', None)
+        if chan:
+            try:
+                chan.send(data)
+            except Exception:
+                pass
 
     def resize(self, cols, rows):
         self.term_cols = cols
@@ -277,3 +283,11 @@ class SSHWorker(QThread):
 
     def stop(self):
         self._running = False
+        # Close the connection from here too: it unblocks a run() stuck in
+        # connect() (up to its 10s timeout) so the thread exits promptly.
+        client = getattr(self, 'client', None)
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass

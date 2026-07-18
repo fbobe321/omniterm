@@ -59,6 +59,11 @@ class MainWindow(QMainWindow):
         self._blank_icon = QIcon(_blank)
         self._dot_icon = QIcon(get_icon("dot").pixmap(_sz, _sz))
         self._activity = {}      # top-level tab -> blink ticks remaining
+        # Stopped workers whose threads haven't finished yet. A running QThread
+        # that gets garbage-collected aborts the whole process ("QThread:
+        # Destroyed while thread is still running"), so they're parked here
+        # until their finished signal fires.
+        self._dying_workers = set()
         self._blink_on = False
         self._blink_timer = QTimer(self)
         self._blink_timer.setInterval(500)
@@ -411,10 +416,10 @@ class MainWindow(QMainWindow):
             return
         old = getattr(tab, "worker", None)
         if old is not None:
-            try:
-                old.stop()
-            except Exception:
-                pass
+            tab.detach_worker()  # old worker must not keep feeding this view
+            if isinstance(old, (SSHWorker, LocalPTYWorker)):
+                self.sftp_browser.forget_worker(old)
+            self._retire_worker(old)
         worker = self._make_worker(session_type, session_data)
         if worker:
             tab.hide_disconnect_bar()
@@ -742,6 +747,22 @@ class MainWindow(QMainWindow):
             self._clear_activity(widget)  # focusing a tab clears its activity dot
         self.sftp_browser.show_worker(self._primary_fs_worker(widget))
 
+    def _retire_worker(self, worker):
+        """Stop a worker and keep it referenced until its thread has actually
+        finished. Waits briefly (the read loops poll every few ms), then parks
+        stragglers - e.g. one blocked in connect() - in _dying_workers instead
+        of blocking the GUI."""
+        try:
+            worker.stop()
+        except Exception:
+            pass
+        if worker.wait(200):
+            return
+        self._dying_workers.add(worker)
+        worker.finished.connect(lambda w=worker: self._dying_workers.discard(w))
+        if not worker.isRunning():  # finished between wait() and connect()
+            self._dying_workers.discard(worker)
+
     def _stop_terminal(self, term):
         worker = getattr(term, "worker", None)
         if not worker:
@@ -755,8 +776,8 @@ class MainWindow(QMainWindow):
                 worker.auth_success.disconnect()
         except (TypeError, RuntimeError):
             pass
-        worker.stop()
-        worker.wait()
+        term.worker = None
+        self._retire_worker(worker)
 
     def rename_tab(self, index):
         if index < 0:
@@ -1303,6 +1324,16 @@ class MainWindow(QMainWindow):
                 self._control_server.stop()
             except Exception:
                 pass
+        # Stop every terminal worker before the window (and with it the Python
+        # references to the QThreads) goes away - a running QThread that gets
+        # destroyed aborts the process.
+        for i in range(self.tabs.count()):
+            widget = self.tabs.widget(i)
+            terminals = getattr(widget, "terminals", None)
+            for term in (terminals if terminals is not None else [widget]):
+                self._stop_terminal(term)
+        for worker in list(self._dying_workers):
+            worker.wait(2000)
         super().closeEvent(event)
 
     GITHUB_URL = "https://github.com/fbobe321/omniterm"

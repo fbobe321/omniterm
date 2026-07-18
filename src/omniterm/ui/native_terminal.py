@@ -108,7 +108,11 @@ class NativeTerminal(QWidget):
         self._font.setFamily(family.split(",")[0].strip().strip("'\""))
         self._font.setStyleHint(QFont.StyleHint.Monospace)
         self._font.setFixedPitch(True)
-        self._font.setPointSizeF(float(size))
+        try:
+            size = float(size)
+        except (TypeError, ValueError):
+            size = 12.0
+        self._font.setPointSizeF(size if size > 0 else 12.0)
         self._fm = QFontMetricsF(self._font)
         self._cw = max(1.0, self._fm.horizontalAdvance("W"))
         self._ch = max(1.0, self._fm.height())
