@@ -9,7 +9,7 @@ import re
 import pyte
 from PyQt6.QtWidgets import QWidget, QApplication, QMenu
 from PyQt6.QtGui import QPainter, QFont, QFontMetricsF, QColor, QGuiApplication
-from PyQt6.QtCore import Qt, pyqtSignal, QRectF, QPointF, QTimer
+from PyQt6.QtCore import Qt, pyqtSignal, QRect, QRectF, QPointF, QTimer
 
 # Alternate-screen enter/leave sequences (vi, htop, btop, less, ...)
 _ALT_RE = re.compile(r'\x1b\[\?(?:1049|1047|47)([hl])')
@@ -195,8 +195,21 @@ class NativeTerminal(QWidget):
             self.update()
         else:
             for y in dirty:
-                self.update(0, int(y * self._ch), self.width(), int(self._ch) + 2)
+                self.update(self._row_band(y))
         dirty.clear()
+
+    def _row_band(self, y):
+        """Repaint rect for row y, padded a couple of pixels above and below.
+
+        Box-drawing glyphs (│ ─ ┌ ...) deliberately overshoot their cell so
+        lines connect seamlessly across rows; an unpadded band would erase a
+        neighbour's overshoot without redrawing it (and miss erasing this
+        row's), leaving stale 1-2px slivers - "ghost lines" - wherever ncurses
+        apps redraw individual rows. The pad makes the erased area and the
+        redrawn rows cover each other exactly."""
+        pad = max(2, int(self._ch * 0.2))
+        return QRect(0, int(y * self._ch) - pad,
+                     self.width(), int(self._ch) + 2 * pad + 1)
 
     def _feed_active(self, text):
         if not text:
@@ -229,8 +242,7 @@ class NativeTerminal(QWidget):
 
     def _toggle_cursor(self):
         self._cursor_on = not self._cursor_on
-        cy = self._screen.cursor.y
-        self.update(0, int(cy * self._ch), self.width(), int(self._ch) + 2)
+        self.update(self._row_band(self._screen.cursor.y))
 
     def _wake_cursor(self):
         """Keep the cursor visible as it moves. A pure cursor move (arrow keys in
@@ -244,7 +256,7 @@ class NativeTerminal(QWidget):
         cy = self._screen.cursor.y
         for y in {self._cursor_row, cy}:
             if 0 <= y < self._rows:
-                self.update(0, int(y * self._ch), self.width(), int(self._ch) + 2)
+                self.update(self._row_band(y))
         self._cursor_row = cy
 
     # ---- sizing ----
