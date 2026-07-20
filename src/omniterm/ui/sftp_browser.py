@@ -1,6 +1,6 @@
-from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView, QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QLineEdit, QCompleter, QProgressDialog, QMessageBox, QToolButton
+from PyQt6.QtWidgets import QDockWidget, QTreeView, QMenu, QFileDialog, QAbstractItemView, QWidget, QVBoxLayout, QHBoxLayout, QCheckBox, QLineEdit, QCompleter, QProgressDialog, QMessageBox, QToolButton, QApplication
 from PyQt6.QtGui import QStandardItemModel, QStandardItem, QAction, QDrag, QDesktopServices
-from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl, QSize, QStringListModel, QFileSystemWatcher, QTimer, QThread
+from PyQt6.QtCore import Qt, pyqtSignal, QMimeData, QUrl, QSize, QStringListModel, QFileSystemWatcher, QTimer, QThread, QPersistentModelIndex
 import os
 import stat
 import posixpath
@@ -81,6 +81,9 @@ class LocalFSAdapter:
 
     def mkdir(self, path):
         os.mkdir(path)
+
+    def rename(self, oldpath, newpath):
+        os.rename(oldpath, newpath)
 
     def close(self):
         pass
@@ -173,9 +176,73 @@ class SFTPTreeView(QTreeView):
         self.setDefaultDropAction(Qt.DropAction.CopyAction)
         # Drops are delivered to the viewport for item views; it must accept them too.
         self.viewport().setAcceptDrops(True)
+        # Renames are started explicitly (slow second click / F2 / context menu),
+        # never by Qt's own edit triggers.
+        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._press_on_current = False
+        self._pending_rename = None          # QPersistentModelIndex of the name cell
+        self._rename_timer = QTimer(self)
+        self._rename_timer.setSingleShot(True)
+        self._rename_timer.timeout.connect(self._start_pending_rename)
+
+    # --- Explorer-style rename: a slow second click on the selected name edits it ---
+    def mousePressEvent(self, event):
+        # Record whether this press landed on the already-current row BEFORE the
+        # default handler moves the selection (a first click merely selects).
+        index = self.indexAt(event.position().toPoint())
+        self._press_on_current = (
+            event.button() == Qt.MouseButton.LeftButton
+            and index.isValid()
+            and not (event.modifiers() & (Qt.KeyboardModifier.ControlModifier
+                                          | Qt.KeyboardModifier.ShiftModifier))
+            and index.siblingAtColumn(0) == self.currentIndex().siblingAtColumn(0)
+            and self.selectionModel().isSelected(index.siblingAtColumn(0)))
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if event.button() != Qt.MouseButton.LeftButton or not self._press_on_current:
+            return
+        self._press_on_current = False
+        index = self.indexAt(event.position().toPoint())
+        if (index.isValid() and index.column() == 0
+                and index == self.currentIndex().siblingAtColumn(0)):
+            self._pending_rename = QPersistentModelIndex(index)
+            # Wait out the double-click window so double-click still opens/navigates.
+            self._rename_timer.start(QApplication.doubleClickInterval() + 100)
+
+    def mouseDoubleClickEvent(self, event):
+        self._cancel_pending_rename()
+        self._press_on_current = False
+        super().mouseDoubleClickEvent(event)
+
+    def _cancel_pending_rename(self):
+        self._rename_timer.stop()
+        self._pending_rename = None
+
+    def _start_pending_rename(self):
+        pidx = self._pending_rename
+        self._pending_rename = None
+        if pidx is None or not pidx.isValid():
+            return  # the listing was reloaded meanwhile
+        index = self.model().index(pidx.row(), 0)
+        if index != self.currentIndex().siblingAtColumn(0):
+            return  # selection moved on; don't rename something else
+        self.browser.begin_rename(index)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_F2:
+            self.browser.begin_rename(self.currentIndex())
+            return
+        super().keyPressEvent(event)
+
+    def closeEditor(self, editor, hint):
+        super().closeEditor(editor, hint)
+        self.browser.finish_rename()
 
     # --- Drag OUT (remote -> OS file manager): download to temp, hand over local URLs ---
     def startDrag(self, supportedActions):
+        self._cancel_pending_rename()
         if self.browser.sftp is None:
             return
 
@@ -303,7 +370,7 @@ class SFTPBrowser(QDockWidget):
         self.follow_check.setToolTip(
             "Keep this panel in sync with the shell's current directory as you "
             "cd around. Local terminals follow automatically; SSH sessions get a "
-            "one-time bash prompt setup (sent invisibly, nothing to clean up).")
+            "one-time shell prompt setup (sent invisibly, nothing to clean up).")
         self.follow_check.toggled.connect(self._on_follow_toggled)
 
         # Refresh button, next to the follow checkbox: reload the current folder.
@@ -352,6 +419,11 @@ class SFTPBrowser(QDockWidget):
         self._watcher.fileChanged.connect(self._on_edited_file_changed)
         self._edits = {}                 # local temp path -> {remote, mtime}
         self._prompting = set()          # local paths with an open overwrite prompt
+
+        # In-place rename (slow second click / F2 / context menu)
+        self._rename_item = None         # QStandardItem being edited
+        self._rename_old = ""            # its name before editing
+        self._rename_after_list = None   # entry name to auto-rename once listed
 
     def _ensure_connected(self):
         # Non-blocking presence check only. Never probe the network on the GUI
@@ -409,45 +481,49 @@ class SFTPBrowser(QDockWidget):
             self._active_state = None
             self.current_path = "."
             self.path_edit.clear()
+            self.cancel_rename()
             self.model.clear()
             self.model.setHorizontalHeaderLabels(["Name", "Size", "Modified"])
             return
         self._activate_state(state)
 
-    # Bash setup that makes an SSH session report its directory via OSC 7 each
+    # Shell setup that makes an SSH session report its directory via OSC 7 each
     # prompt, sent once when "Follow terminal folder" is enabled. Local/home
-    # terminals don't need this - PROMPT_COMMAND is set in their environment at
-    # spawn (see local_pty.py), so nothing is ever typed into them.
+    # terminals don't need this - their cwd is tracked at spawn (see local_pty.py),
+    # so nothing is ever typed into them.
     #
-    # It is sent with a leading space (kept out of shell history) and, once run,
-    # erases its own echoed line (\033[1A\033[2K) so the user doesn't have to
-    # delete it. The host part of the URI is omitted (the panel ignores it) to
-    # keep the line short. On typical terminal widths the echo is erased fully;
-    # on a narrow terminal where it wraps, a remnant row may remain - we only
-    # ever clear the one line we know is ours, never scrollback above it.
+    # PROMPT_COMMAND covers bash; the precmd() function covers zsh (which
+    # ignores PROMPT_COMMAND) - each shell harmlessly ignores the other's hook.
+    # It is sent with a leading space (kept out of shell history) and via
+    # send_invisible(), which strips the command's echo from the output stream
+    # so nothing ever appears in the terminal.
     FOLLOW_CMD = (
-        " export PROMPT_COMMAND='printf \"\\033]7;file://%s\\033\\134\" \"$PWD\"'"
-        "; printf '\\033[1A\\033[2K'\n"
+        " export PROMPT_COMMAND='printf \"\\033]7;file://%s\\a\" \"$PWD\"'; "
+        "precmd() { printf '\\033]7;file://%s\\a' \"$PWD\"; }\n"
     )
 
     def _bootstrap_follow(self, worker):
         """Configure the shell to emit OSC 7 so the panel can follow it.
 
-        Local/home terminals already emit OSC 7 via their environment, so nothing
-        is injected for them. Only SSH sessions - where we can't preset the remote
-        environment - get the one-time FOLLOW_CMD, which erases its own echo."""
+        Local/home terminals already report their cwd (environment/procfs), so
+        nothing is injected for them. Only SSH sessions - where we can't preset
+        the remote environment - get the one-time FOLLOW_CMD, sent with its echo
+        suppressed so it never shows in the terminal."""
         if worker is None or id(worker) in self._bootstrapped:
             return
         # Local (and serial) workers need no injected command; mark them done.
         if worker.__class__.__name__ != "SSHWorker":
             self._bootstrapped.add(id(worker))
             return
-        if hasattr(worker, "send_data"):
-            try:
+        try:
+            if hasattr(worker, "send_invisible"):
+                worker.send_invisible(self.FOLLOW_CMD)
+                self._bootstrapped.add(id(worker))
+            elif hasattr(worker, "send_data"):
                 worker.send_data(self.FOLLOW_CMD)
                 self._bootstrapped.add(id(worker))
-            except Exception:
-                pass
+        except Exception:
+            pass
 
     def _activate_state(self, state):
         self._active_state = state
@@ -455,6 +531,7 @@ class SFTPBrowser(QDockWidget):
         self._completer_dir = None  # refresh path completion for the new connection
         # Clear the previous tab's files now; the async listing repopulates it
         # (so we don't show one connection's files under another while loading).
+        self.cancel_rename()
         self.model.clear()
         self.model.setHorizontalHeaderLabels(["Name", "Size", "Modified"])
         # When following, jump to the shell's last-known dir for this worker
@@ -498,6 +575,84 @@ class SFTPBrowser(QDockWidget):
     def refresh(self):
         """Reload the listing for the current directory."""
         self.list_directory(self.current_path)
+
+    # ---- new folder ----
+    def create_folder(self):
+        """Create a new directory in the current folder with a placeholder name,
+        then open an inline rename on it (Explorer-style)."""
+        if not self._ensure_connected():
+            return
+        existing = {self.model.item(r, 0).text()
+                    for r in range(self.model.rowCount())
+                    if self.model.item(r, 0) is not None}
+        name, n = "New Folder", 2
+        while name in existing:
+            name = f"New Folder ({n})"
+            n += 1
+        try:
+            self.sftp.mkdir(posixpath.join(self.current_path, name))
+        except Exception as e:
+            self.error_occurred.emit(f"Create Folder Error: {e}")
+            return
+        self._rename_after_list = name  # start renaming once the listing lands
+        self.refresh()
+
+    # ---- in-place rename ----
+    def begin_rename(self, index):
+        """Open an inline editor on the name cell of `index`."""
+        if self.sftp is None or index is None or not index.isValid():
+            return
+        if self._rename_item is not None:
+            return  # an edit is already open
+        item = self.model.itemFromIndex(index.siblingAtColumn(0))
+        if item is None or item.data(PARENT_ROLE) or not item.data(PATH_ROLE):
+            return
+        item.setEditable(True)
+        # Move focus first: this closes any stale open editor (whose closeEditor
+        # callback runs finish_rename) before we record the new edit's state.
+        self.tree_view.setCurrentIndex(item.index())
+        self._rename_item = item
+        self._rename_old = item.text()
+        self.tree_view.edit(item.index())
+
+    def cancel_rename(self):
+        """Abandon an in-progress rename (the listing is about to be replaced,
+        so the edited item is going away)."""
+        item, self._rename_item = self._rename_item, None
+        if item is not None:
+            try:
+                item.setEditable(False)
+            except RuntimeError:
+                pass  # item already deleted with the old model contents
+
+    def finish_rename(self):
+        """Apply (or discard) the name edit once its editor closes."""
+        item = self._rename_item
+        if item is None:
+            return
+        self._rename_item = None
+        item.setEditable(False)
+        old_name = self._rename_old
+        new_name = item.text().strip()
+        old_path = item.data(PATH_ROLE)
+        if not new_name or new_name == old_name:
+            item.setText(old_name)
+            return
+        if "/" in new_name or new_name in (".", ".."):
+            item.setText(old_name)
+            self.error_occurred.emit(f"Invalid name: {new_name}")
+            return
+        new_path = posixpath.join(posixpath.dirname(old_path), new_name)
+        try:
+            self.sftp.rename(old_path, new_path)
+        except Exception as e:
+            item.setText(old_name)
+            self.error_occurred.emit(f"Rename Error: {e}")
+            return
+        item.setText(new_name)
+        item.setData(new_path, PATH_ROLE)
+        self.status_message.emit(f"Renamed {old_name} to {new_name}")
+        self.refresh()
 
     def _on_path_entered(self):
         if self.sftp is None:
@@ -587,6 +742,7 @@ class SFTPBrowser(QDockWidget):
         self.current_path = path
         state["path"] = path  # remember location per connection
         self.path_edit.setText(path)
+        self.cancel_rename()
         self.model.clear()
         self.model.setHorizontalHeaderLabels(["Name", "Size", "Modified"])
 
@@ -638,6 +794,16 @@ class SFTPBrowser(QDockWidget):
 
         self.tree_view.resizeColumnToContents(0)
 
+        # A freshly created folder gets renamed as soon as it appears.
+        pending, self._rename_after_list = self._rename_after_list, None
+        if pending:
+            for r in range(self.model.rowCount()):
+                item = self.model.item(r, 0)
+                if item is not None and item.text() == pending:
+                    self.tree_view.scrollTo(item.index())
+                    self.begin_rename(item.index())
+                    break
+
     def on_item_double_clicked(self, index):
         item = self.model.itemFromIndex(index.siblingAtColumn(0))
         if item is None:
@@ -682,6 +848,12 @@ class SFTPBrowser(QDockWidget):
                 open_action = QAction("Open", self)
                 open_action.triggered.connect(lambda: self.list_directory(item.data(PATH_ROLE)))
                 menu.addAction(open_action)
+            if not item.data(PARENT_ROLE):
+                rename_action = QAction("Rename", self)
+                rename_action.setShortcut("F2")
+                rename_action.triggered.connect(
+                    lambda checked=False, ix=index.siblingAtColumn(0): self.begin_rename(ix))
+                menu.addAction(rename_action)
 
         if len(selected_files) > 1:
             download_action = QAction(f"Download {len(selected_files)} Files...", self)
@@ -700,6 +872,10 @@ class SFTPBrowser(QDockWidget):
             download_action = QAction("Download...", self)
             download_action.triggered.connect(lambda: self.download_path(selected_files[0]))
             menu.addAction(download_action)
+
+        new_folder_action = QAction("New Folder", self)
+        new_folder_action.triggered.connect(self.create_folder)
+        menu.addAction(new_folder_action)
 
         # Upload always targets the current directory (supports multiple files)
         upload_action = QAction("Upload Files Here...", self)

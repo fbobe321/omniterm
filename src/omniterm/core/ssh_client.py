@@ -29,6 +29,10 @@ class SSHWorker(QThread):
         self.term_cols = 80
         self.term_rows = 24
         self.inshellisense = inshellisense
+        # Echo suppression for send_invisible() (see _filter_echo)
+        self._suppress_echo = []      # command texts whose echo should be hidden
+        self._echo_buf = ""           # output held back while matching an echo
+        self._echo_deadline = 0.0     # give-up time for the oldest pending echo
 
     def run(self):
         try:
@@ -124,12 +128,22 @@ class SSHWorker(QThread):
                         chunk += part
                     if chunk:
                         data = chunk.decode('utf-8', errors='replace')
-                        self.data_received.emit(data)
+                        # Scan before filtering so cwd detection is never delayed
+                        # by output held back while matching an echo.
                         self._scan_cwd(data)
+                        data = self._filter_echo(data)
+                        if data:
+                            self.data_received.emit(data)
                     if eof:
                         break
                 elif self.channel.closed or self.channel.exit_status_ready():
                     break
+                else:
+                    # No new output: release any held-back bytes whose expected
+                    # echo never arrived (e.g. shell with echo disabled).
+                    stale = self._flush_stale_echo()
+                    if stale:
+                        self.data_received.emit(stale)
                 time.sleep(0.002)
 
             try:
@@ -257,6 +271,64 @@ class SSHWorker(QThread):
                 chan.send(data)
             except Exception:
                 pass
+
+    def send_invisible(self, data):
+        """Send input to the shell while hiding its echo from the terminal.
+
+        The pty echoes typed input back verbatim; for one-time setup commands
+        (e.g. the Files panel's follow bootstrap) that echo is just noise the
+        user would see. The read loop strips the first occurrence of the
+        command text (plus its trailing newline) from the output stream."""
+        self._suppress_echo.append(data.rstrip("\r\n"))
+        self._echo_deadline = time.time() + 5.0
+        self.send_data(data)
+
+    def _filter_echo(self, data):
+        """Remove the echo of send_invisible() commands from the output stream.
+
+        While an echo is pending, at most one command's worth of trailing bytes
+        is held back (so a match split across reads still completes); if the
+        echo doesn't appear before the deadline, everything is released."""
+        if not self._suppress_echo:
+            return data
+        self._echo_buf += data
+        out = []
+        while self._suppress_echo:
+            target = self._suppress_echo[0]
+            idx = self._echo_buf.find(target)
+            if idx < 0:
+                break
+            out.append(self._echo_buf[:idx])
+            rest = self._echo_buf[idx + len(target):]
+            # Swallow the newline echoed after the command line, too.
+            if rest.startswith("\r\n"):
+                rest = rest[2:]
+            elif rest[:1] in ("\r", "\n"):
+                rest = rest[1:]
+            self._echo_buf = rest
+            self._suppress_echo.pop(0)
+        if not self._suppress_echo:
+            out.append(self._echo_buf)
+            self._echo_buf = ""
+        elif time.time() > self._echo_deadline:
+            self._suppress_echo.clear()
+            out.append(self._echo_buf)
+            self._echo_buf = ""
+        else:
+            keep = len(self._suppress_echo[0]) + 8
+            if len(self._echo_buf) > keep:
+                out.append(self._echo_buf[:-keep])
+                self._echo_buf = self._echo_buf[-keep:]
+        return "".join(out)
+
+    def _flush_stale_echo(self):
+        """Give up on a pending echo whose deadline has passed (called when the
+        channel is idle, so held-back output is never stuck invisible)."""
+        if self._suppress_echo and time.time() > self._echo_deadline:
+            self._suppress_echo.clear()
+            buf, self._echo_buf = self._echo_buf, ""
+            return buf
+        return ""
 
     def resize(self, cols, rows):
         self.term_cols = cols

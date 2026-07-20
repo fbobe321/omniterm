@@ -41,6 +41,7 @@ class LocalPTYWorker(QThread):
         # OSC 7 cwd tracking state (see _scan_cwd)
         self._osc_buffer = ""
         self._last_cwd = None
+        self._osc7_seen = False   # disables the /proc fallback once OSC 7 works
 
     def _scan_cwd(self, data):
         """Detect the shell's working directory from OSC 7 sequences and emit
@@ -50,11 +51,23 @@ class LocalPTYWorker(QThread):
             self._osc_buffer = self._osc_buffer[-4096:]
         matches = _OSC7_RE.findall(self._osc_buffer)
         if matches:
+            self._osc7_seen = True
             path = urllib.parse.unquote(matches[-1])
             self._osc_buffer = ""
             if path and path != self._last_cwd:
                 self._last_cwd = path
                 self.cwd_changed.emit(path)
+
+    def _poll_proc_cwd(self, pid):
+        """Read the shell's cwd from /proc (Linux); fallback when OSC 7 is
+        unavailable. Emits cwd_changed just like the OSC 7 path."""
+        try:
+            path = os.readlink(f"/proc/{pid}/cwd")
+        except OSError:
+            return
+        if path and path != self._last_cwd:
+            self._last_cwd = path
+            self.cwd_changed.emit(path)
 
     def _run_startup(self):
         if self.startup:
@@ -219,9 +232,20 @@ class LocalPTYWorker(QThread):
                 self._run_startup()
                 self._maybe_start_inshellisense()
 
+                # Fallback cwd tracking via /proc for shells that don't emit
+                # OSC 7 (zsh; bash whose rc files clobber PROMPT_COMMAND).
+                # Stops permanently once a real OSC 7 sequence is seen.
+                can_poll_cwd = os.path.isdir(f"/proc/{pid}")
+                last_cwd_poll = 0.0
+
                 while self._running:
                     # select wakes as soon as data is available (low latency).
                     r, w, e = select.select([self.master_fd], [], [], 0.1)
+                    if can_poll_cwd and not self._osc7_seen:
+                        now = time.monotonic()
+                        if now - last_cwd_poll >= 1.0:
+                            last_cwd_poll = now
+                            self._poll_proc_cwd(pid)
                     if r:
                         # Drain what's available now and emit immediately.
                         chunk = b""

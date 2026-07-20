@@ -29,6 +29,24 @@ _BLANK = pyte.screens.Char(data=" ", fg="default", bg="default", bold=False,
                            reverse=False, blink=False)
 
 
+class _CharsetStream(pyte.Stream):
+    """pyte.Stream that honors VT100 line-drawing charset switching.
+
+    pyte's default UTF-8 mode deliberately ignores ESC(0 and SI/SO, so ncurses
+    apps (nvtop, htop, dialog) that draw boxes via terminfo smacs/rmacs show
+    letters (q, x, m) instead of lines. Workers feed already-decoded str, so
+    disabling pyte's UTF-8 mode only enables the charset translation - UTF-8
+    text is unaffected. Real terminals (xterm) honor line drawing even in
+    UTF-8 mode, which is what TERM=xterm-256color promises."""
+
+    def __init__(self, screen):
+        super().__init__(screen)
+        self.use_utf8 = False
+
+    def select_other_charset(self, code):
+        pass  # never re-enter pyte's charset-ignoring UTF-8 mode (ESC % G)
+
+
 class NativeTerminal(QWidget):
     send_input = pyqtSignal(str)   # user input to forward to the shell
     resized = pyqtSignal(int, int)  # cols, rows (for PTY resize)
@@ -56,8 +74,8 @@ class NativeTerminal(QWidget):
         # Main screen (with scrollback) + a separate alternate screen (vi/htop).
         self._main_screen = pyte.HistoryScreen(self._cols, self._rows, history=5000, ratio=0.5)
         self._alt_screen = pyte.Screen(self._cols, self._rows)
-        self._main_stream = pyte.Stream(self._main_screen)
-        self._alt_stream = pyte.Stream(self._alt_screen)
+        self._main_stream = _CharsetStream(self._main_screen)
+        self._alt_stream = _CharsetStream(self._alt_screen)
         self._screen = self._main_screen
         self._stream = self._main_stream
         self._in_alt = False
