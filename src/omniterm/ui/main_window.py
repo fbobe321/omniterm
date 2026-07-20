@@ -1,8 +1,9 @@
 import os
 import re
-from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QInputDialog, QMenu, QCheckBox, QToolBar, QToolButton, QKeySequenceEdit
+from PyQt6.QtWidgets import QMainWindow, QTabWidget, QVBoxLayout, QWidget, QDialog, QFormLayout, QLineEdit, QPushButton, QComboBox, QFileDialog, QMessageBox, QSpinBox, QColorDialog, QInputDialog, QMenu, QCheckBox, QToolBar, QToolButton, QKeySequenceEdit, QLabel, QSizePolicy
 from PyQt6.QtGui import QColor, QDesktopServices, QAction, QIcon, QPixmap, QShortcut, QKeySequence
 from PyQt6.QtCore import Qt, QUrl, QSize, QTimer
+from omniterm import app_version
 from omniterm.ui.icons import get_icon, app_icon
 from omniterm.ui.theme import APP_STYLESHEET
 from omniterm.ui.session_dock import SessionDock
@@ -181,6 +182,17 @@ class MainWindow(QMainWindow):
         toolbar.addSeparator()
         add_button("Settings", "settings", menu=self.settings_menu)
         add_button("Help", "help", menu=self.help_menu)
+
+        # Version label pinned to the top-right corner of the ribbon.
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        toolbar.addWidget(spacer)
+        version_label = QLabel(f"v{app_version()}")
+        version_label.setStyleSheet(
+            "color: #8a93a2; font-size: 11px; padding: 0 10px 0 0; background: transparent;")
+        version_label.setToolTip("OmniTerm version")
+        version_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight)
+        toolbar.addWidget(version_label)
 
     # layout key -> (pane count, splitter orientation, title)
     # "Horizontal" = a horizontal divider (panes stacked); "Vertical" = a
