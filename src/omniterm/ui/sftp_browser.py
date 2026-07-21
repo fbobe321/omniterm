@@ -85,6 +85,12 @@ class LocalFSAdapter:
     def rename(self, oldpath, newpath):
         os.rename(oldpath, newpath)
 
+    def remove(self, path):
+        os.remove(path)
+
+    def rmdir(self, path):
+        os.rmdir(path)
+
     def close(self):
         pass
 
@@ -243,6 +249,9 @@ class SFTPTreeView(QTreeView):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key.Key_F2:
             self.browser.begin_rename(self.currentIndex())
+            return
+        if event.key() == Qt.Key.Key_Delete:
+            self.browser.delete_selected()
             return
         super().keyPressEvent(event)
 
@@ -892,11 +901,93 @@ class SFTPBrowser(QDockWidget):
                 paths.append(path)
         return paths
 
+    def selected_entry_paths(self):
+        """(path, is_dir, name) for every selected entry, excluding the ".."
+        navigation row. Used by delete (which, unlike download, acts on folders
+        too)."""
+        out = []
+        seen = set()
+        for index in self.tree_view.selectionModel().selectedRows():
+            item = self.model.itemFromIndex(index.siblingAtColumn(0))
+            if item is None or item.data(PARENT_ROLE):
+                continue
+            path = item.data(PATH_ROLE)
+            if not path or path in seen:
+                continue
+            seen.add(path)
+            out.append((path, bool(item.data(ISDIR_ROLE)), item.text()))
+        return out
+
+    def _delete_entry(self, path, is_dir):
+        """Recursively delete a file or directory via the active adapter. Works
+        for both local (LocalFSAdapter) and remote (paramiko) since both expose
+        listdir_attr/remove/rmdir."""
+        if is_dir:
+            for attr in self.sftp.listdir_attr(path):
+                child = posixpath.join(path, attr.filename)
+                self._delete_entry(child, stat.S_ISDIR(attr.st_mode))
+            self.sftp.rmdir(path)
+        else:
+            self.sftp.remove(path)
+
+    def delete_entries(self, entries):
+        """Confirm, then delete the given [(path, is_dir, name), ...] entries.
+        Folders are removed recursively with everything inside them."""
+        entries = [e for e in entries if e[0]]
+        if not entries or not self._ensure_connected():
+            return
+        n = len(entries)
+        if n == 1:
+            path, is_dir, name = entries[0]
+            body = (f'Delete the folder "{name}" and everything inside it?'
+                    if is_dir else f'Delete the file "{name}"?')
+        else:
+            preview = ", ".join(e[2] for e in entries[:6])
+            if n > 6:
+                preview += ", …"
+            body = (f"Delete these {n} items?\n\n{preview}\n\n"
+                    "Folders are deleted with all their contents.")
+        reply = QMessageBox.question(
+            self, "Confirm Delete",
+            body + "\n\nThis cannot be undone.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        errors = []
+        for path, is_dir, name in entries:
+            try:
+                self._delete_entry(path, is_dir)
+            except Exception as e:  # noqa: BLE001
+                errors.append(f"{name}: {e}")
+        if errors:
+            self.error_occurred.emit("Delete failed — " + "; ".join(errors))
+        else:
+            self.status_message.emit(
+                f"Deleted {n} item{'s' if n != 1 else ''}.")
+        self.refresh()
+
+    def delete_selected(self):
+        """Delete the current selection (bound to the Delete key)."""
+        self.delete_entries(self.selected_entry_paths())
+
     def show_context_menu(self, position):
         index = self.tree_view.indexAt(position)
         menu = QMenu()
 
         selected_files = self.selected_file_paths()
+
+        # Delete acts on the current selection; but if the user right-clicked an
+        # entry that isn't part of the selection, act on that entry instead
+        # (standard file-manager behaviour).
+        delete_targets = self.selected_entry_paths()
+        if index.isValid():
+            clicked = self.model.itemFromIndex(index.siblingAtColumn(0))
+            if (clicked is not None and not clicked.data(PARENT_ROLE)
+                    and clicked.data(PATH_ROLE)
+                    and clicked.data(PATH_ROLE) not in {t[0] for t in delete_targets}):
+                delete_targets = [(clicked.data(PATH_ROLE),
+                                   bool(clicked.data(ISDIR_ROLE)), clicked.text())]
 
         if index.isValid():
             item = self.model.itemFromIndex(index.siblingAtColumn(0))
@@ -929,6 +1020,17 @@ class SFTPBrowser(QDockWidget):
             download_action = QAction("Download...", self)
             download_action.triggered.connect(lambda: self.download_path(selected_files[0]))
             menu.addAction(download_action)
+
+        if delete_targets:
+            menu.addSeparator()
+            label = ("Delete" if len(delete_targets) == 1
+                     else f"Delete {len(delete_targets)} Items")
+            delete_action = QAction(label, self)
+            delete_action.setShortcut("Del")
+            delete_action.triggered.connect(
+                lambda checked=False, t=list(delete_targets): self.delete_entries(t))
+            menu.addAction(delete_action)
+            menu.addSeparator()
 
         new_folder_action = QAction("New Folder", self)
         new_folder_action.triggered.connect(self.create_folder)

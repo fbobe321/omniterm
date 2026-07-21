@@ -12,14 +12,31 @@ only "ready to test" once it's version-bumped, rebuilt, and **published to PyPI*
 **Publishing is automatic after changes — do NOT ask for go-ahead** (standing instruction).
 
 ## Current state
-- **Version:** `0.1.87` — live on PyPI and GitHub, all work committed and pushed.
+- **Version:** `0.1.88` — live on PyPI and GitHub, all work committed and pushed.
 - **PyPI:** https://pypi.org/project/omniterm/ (`pip install -U omniterm`, run `omniterm`)
-- **GitHub:** https://github.com/fbobe321/omniterm  (branch `main`, tag `v0.1.87`)
+- **GitHub:** https://github.com/fbobe321/omniterm  (branch `main`, tag `v0.1.88`)
 - **PRD:** `/data3/omniterm/PRD.md` (v4, as-built — native terminal).
 - **Working tree:** clean (last release committed + pushed).
-- **In flight / awaiting user test:** the v0.1.87 exit-crash fix below — user to verify on Windows.
+- **In flight / awaiting user test:** v0.1.87 exit-crash fix + v0.1.88 Files delete — user to verify on Windows.
 
 ## Session log (running — newest first)
+### 2026-07-21 — v0.1.88 shipped (Files panel: delete files/folders)
+Right-click context menu in the Files (SFTP) panel gained a **Delete** entry for
+files and folders, with an "are you sure?" confirmation (`QMessageBox.question`,
+default No). Also bound to the **Del** key (`SFTPTreeView.keyPressEvent`, next to
+F2 rename). Works local + remote via one recursive `_delete_entry(path, is_dir)`
+that uses the adapter's `listdir_attr`/`remove`/`rmdir` (added `remove`/`rmdir` to
+`LocalFSAdapter` to match paramiko's API); folders delete recursively with all
+contents. Menu acts on the current selection, or the right-clicked entry if it
+isn't in the selection (file-manager behaviour); the ".." row is never deletable.
+Single vs multi wording ("Delete" / "Delete N Items"). All in `ui/sftp_browser.py`
+(`selected_entry_paths`, `_delete_entry`, `delete_entries`, `delete_selected`,
+menu additions). Verified offscreen: recursive delete empties a nested tree, No
+cancels, ".." excluded, "Delete 2 Items" on multi-select. **Status: awaiting Windows test.**
+- Note: delete runs synchronously on the GUI thread (like mkdir/rename). Fine for
+  files/small trees; a huge remote recursive delete would briefly block the UI —
+  move to a worker thread if that ever bites (backlog).
+
 ### 2026-07-21 — v0.1.87 shipped (exit-crash, take 2)
 User hit `QThread: Destroyed while thread '' is still running` again (Windows, on
 close — the transcript's leading `omniterm` + trailing prompt is launch→use→close,
