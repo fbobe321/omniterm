@@ -616,6 +616,18 @@ class SFTPBrowser(QDockWidget):
                     thread.wait(2000)
                 except Exception:
                     pass
+        # Last resort: a lister/transfer still running here would be destroyed
+        # with the dock and abort the whole process ("QThread: Destroyed while
+        # thread is still running"). Force-terminate it - these block in network
+        # I/O / condition waits that release the GIL, so this is safe at teardown
+        # and strictly better than the abort it prevents.
+        for thread in [*listers, transfer]:
+            if thread is not None and thread.isRunning():
+                try:
+                    thread.terminate()
+                    thread.wait()
+                except Exception:
+                    pass
 
     def refresh(self):
         """Reload the listing for the current directory."""

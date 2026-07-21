@@ -1346,6 +1346,21 @@ class MainWindow(QMainWindow):
                 self._stop_terminal(term)
         for worker in list(self._dying_workers):
             worker.wait(2000)
+        # Last resort: a worker that STILL refuses to exit (most often a Windows
+        # ConPTY read blocked inside pywinpty that close() didn't interrupt from
+        # the GUI thread) would, if left running, be destroyed during teardown -
+        # which makes Qt call qFatal() and abort the whole process ("QThread:
+        # Destroyed while thread is still running"). Force-terminating it is
+        # strictly better than aborting. This is safe here because these workers
+        # block in native reads that release the GIL (the GUI stays responsive
+        # while a terminal sits idle), so terminate() doesn't strand the GIL.
+        for worker in list(self._dying_workers):
+            if worker.isRunning():
+                try:
+                    worker.terminate()
+                    worker.wait()
+                except Exception:
+                    pass
         # The Files panel runs its own QThreads (directory listers, transfers)
         # that aren't terminal workers; join them too or their destruction
         # during window teardown aborts the process.
