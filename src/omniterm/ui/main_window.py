@@ -1346,6 +1346,10 @@ class MainWindow(QMainWindow):
                 self._stop_terminal(term)
         for worker in list(self._dying_workers):
             worker.wait(2000)
+        # The Files panel runs its own QThreads (directory listers, transfers)
+        # that aren't terminal workers; join them too or their destruction
+        # during window teardown aborts the process.
+        self.sftp_browser.shutdown()
         super().closeEvent(event)
 
     GITHUB_URL = "https://github.com/fbobe321/omniterm"

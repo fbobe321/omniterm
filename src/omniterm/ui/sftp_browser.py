@@ -119,6 +119,16 @@ class SFTPLister(QThread):
         with self._cv:
             self._alive = False
             self._cv.notify()
+        # If the thread is blocked in a network call on a dead connection
+        # (e.g. after a forcibly-closed socket), notifying the condition
+        # variable isn't enough - it never returns to check _alive. Closing
+        # its dedicated channel makes the in-flight listdir_attr raise at once,
+        # so the thread exits promptly instead of waiting out the 15s timeout.
+        if self._transport is not None and self._sftp is not None:
+            try:
+                self._sftp.close()
+            except Exception:
+                pass
 
     def _client(self):
         if self._sftp is not None:
@@ -492,14 +502,21 @@ class SFTPBrowser(QDockWidget):
     # terminals don't need this - their cwd is tracked at spawn (see local_pty.py),
     # so nothing is ever typed into them.
     #
-    # PROMPT_COMMAND covers bash; the precmd() function covers zsh (which
-    # ignores PROMPT_COMMAND) - each shell harmlessly ignores the other's hook.
-    # It is sent with a leading space (kept out of shell history) and via
-    # send_invisible(), which strips the command's echo from the output stream
-    # so nothing ever appears in the terminal.
+    # Both hooks call one function, __omniterm_cwd:
+    #   - bash: PREPEND it to PROMPT_COMMAND (keeping any existing hook) instead
+    #     of overwriting - overwriting broke the user's prompt and was fragile.
+    #   - zsh: add it to precmd_functions, which survives frameworks like
+    #     oh-my-zsh / powerlevel10k. A bare `precmd` (the old approach) gets
+    #     clobbered by those frameworks, so following silently never fired.
+    # The zsh array append is behind eval + a $ZSH_VERSION guard so POSIX shells
+    # (dash/sh) don't hit a parse error that would abort the whole line.
+    # It's sent with a leading space (kept out of history) via send_invisible(),
+    # which hides everything until the first OSC 7 so no echo appears.
     FOLLOW_CMD = (
-        " export PROMPT_COMMAND='printf \"\\033]7;file://%s\\a\" \"$PWD\"'; "
-        "precmd() { printf '\\033]7;file://%s\\a' \"$PWD\"; }\n"
+        " __omniterm_cwd() { printf '\\033]7;file://%s\\007' \"$PWD\"; }; "
+        "case \"$PROMPT_COMMAND\" in *__omniterm_cwd*) ;; "
+        "*) PROMPT_COMMAND=\"__omniterm_cwd${PROMPT_COMMAND:+;$PROMPT_COMMAND}\" ;; esac; "
+        "[ -n \"$ZSH_VERSION\" ] && eval 'precmd_functions+=(__omniterm_cwd)'; true\n"
     )
 
     def _bootstrap_follow(self, worker):
@@ -571,6 +588,34 @@ class SFTPBrowser(QDockWidget):
                 pass
         if worker is self.active_worker:
             self.show_worker(None)
+
+    def shutdown(self):
+        """Stop every background QThread (directory listers and any in-flight
+        transfer) and wait for them to actually exit.
+
+        Listers and the transfer worker are Qt children of this dock, so if the
+        window is torn down while any is still running, Qt aborts the whole
+        process ("QThread: Destroyed while thread is still running"). An idle
+        lister blocks forever on its condition variable, so it is always
+        "running" - it must be stopped and joined explicitly on shutdown."""
+        listers = self.findChildren(SFTPLister)
+        transfer = self._transfer
+        for lister in listers:
+            try:
+                lister.stop()
+            except Exception:
+                pass
+        if transfer is not None:
+            try:
+                transfer.cancel()
+            except Exception:
+                pass
+        for thread in [*listers, transfer]:
+            if thread is not None:
+                try:
+                    thread.wait(2000)
+                except Exception:
+                    pass
 
     def refresh(self):
         """Reload the listing for the current directory."""

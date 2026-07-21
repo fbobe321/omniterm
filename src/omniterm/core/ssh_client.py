@@ -30,9 +30,9 @@ class SSHWorker(QThread):
         self.term_rows = 24
         self.inshellisense = inshellisense
         # Echo suppression for send_invisible() (see _filter_echo)
-        self._suppress_echo = []      # command texts whose echo should be hidden
-        self._echo_buf = ""           # output held back while matching an echo
-        self._echo_deadline = 0.0     # give-up time for the oldest pending echo
+        self._hiding_echo = False     # True while hiding an injected command's echo
+        self._echo_buf = ""           # output held back while hiding
+        self._echo_deadline = 0.0     # give-up time if the expected OSC 7 never comes
 
     def run(self):
         try:
@@ -275,57 +275,53 @@ class SSHWorker(QThread):
     def send_invisible(self, data):
         """Send input to the shell while hiding its echo from the terminal.
 
-        The pty echoes typed input back verbatim; for one-time setup commands
-        (e.g. the Files panel's follow bootstrap) that echo is just noise the
-        user would see. The read loop strips the first occurrence of the
-        command text (plus its trailing newline) from the output stream."""
-        self._suppress_echo.append(data.rstrip("\r\n"))
+        The pty echoes typed input back, and an interactive shell's readline
+        redraws a long line with interspersed carriage returns, cursor moves,
+        and (in zsh) syntax-highlight colour codes - so the echo never matches
+        the command text byte-for-byte and can't be stripped by comparison.
+
+        It's used only for the Files panel's follow bootstrap, which produces
+        NO stdout and makes the shell emit an OSC 7 sequence on its next prompt.
+        So we hide everything from now until that OSC 7 arrives (see
+        _filter_echo): the command's echo, however the shell redrew it, is
+        swallowed, and the OSC 7 plus the fresh prompt after it show normally."""
+        self._hiding_echo = True
+        self._echo_buf = ""
         self._echo_deadline = time.time() + 5.0
         self.send_data(data)
 
     def _filter_echo(self, data):
-        """Remove the echo of send_invisible() commands from the output stream.
+        """Hide an injected command's echo until the shell reports its directory.
 
-        While an echo is pending, at most one command's worth of trailing bytes
-        is held back (so a match split across reads still completes); if the
-        echo doesn't appear before the deadline, everything is released."""
-        if not self._suppress_echo:
+        Everything received while hiding is held back until an OSC 7 sequence
+        appears (emitted by the just-installed prompt hook); the echo before it
+        is dropped and output resumes from the OSC 7 on. If no OSC 7 arrives
+        before the deadline the shell ignored the setup, so the held-back bytes
+        are released rather than left stuck invisible."""
+        if not self._hiding_echo:
             return data
         self._echo_buf += data
-        out = []
-        while self._suppress_echo:
-            target = self._suppress_echo[0]
-            idx = self._echo_buf.find(target)
-            if idx < 0:
-                break
-            out.append(self._echo_buf[:idx])
-            rest = self._echo_buf[idx + len(target):]
-            # Swallow the newline echoed after the command line, too.
-            if rest.startswith("\r\n"):
-                rest = rest[2:]
-            elif rest[:1] in ("\r", "\n"):
-                rest = rest[1:]
-            self._echo_buf = rest
-            self._suppress_echo.pop(0)
-        if not self._suppress_echo:
-            out.append(self._echo_buf)
+        m = _OSC7_RE.search(self._echo_buf)
+        if m:
+            self._hiding_echo = False
+            rest = self._echo_buf[m.start():]
             self._echo_buf = ""
-        elif time.time() > self._echo_deadline:
-            self._suppress_echo.clear()
-            out.append(self._echo_buf)
-            self._echo_buf = ""
-        else:
-            keep = len(self._suppress_echo[0]) + 8
-            if len(self._echo_buf) > keep:
-                out.append(self._echo_buf[:-keep])
-                self._echo_buf = self._echo_buf[-keep:]
-        return "".join(out)
+            return rest
+        if time.time() > self._echo_deadline:
+            self._hiding_echo = False
+            buf, self._echo_buf = self._echo_buf, ""
+            return buf
+        # Cap the buffer so a shell that never emits OSC 7 can't grow it without
+        # bound before the deadline fires.
+        if len(self._echo_buf) > 65536:
+            self._echo_buf = self._echo_buf[-65536:]
+        return ""
 
     def _flush_stale_echo(self):
         """Give up on a pending echo whose deadline has passed (called when the
         channel is idle, so held-back output is never stuck invisible)."""
-        if self._suppress_echo and time.time() > self._echo_deadline:
-            self._suppress_echo.clear()
+        if self._hiding_echo and time.time() > self._echo_deadline:
+            self._hiding_echo = False
             buf, self._echo_buf = self._echo_buf, ""
             return buf
         return ""
