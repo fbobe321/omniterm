@@ -12,14 +12,33 @@ only "ready to test" once it's version-bumped, rebuilt, and **published to PyPI*
 **Publishing is automatic after changes — do NOT ask for go-ahead** (standing instruction).
 
 ## Current state
-- **Version:** `0.1.86` — live on PyPI and GitHub, all work committed and pushed.
+- **Version:** `0.1.87` — live on PyPI and GitHub, all work committed and pushed.
 - **PyPI:** https://pypi.org/project/omniterm/ (`pip install -U omniterm`, run `omniterm`)
-- **GitHub:** https://github.com/fbobe321/omniterm  (branch `main`, tag `v0.1.86`)
+- **GitHub:** https://github.com/fbobe321/omniterm  (branch `main`, tag `v0.1.87`)
 - **PRD:** `/data3/omniterm/PRD.md` (v4, as-built — native terminal).
 - **Working tree:** clean (last release committed + pushed).
-- **In flight / awaiting user test:** the v0.1.86 fixes below — user to verify on Windows.
+- **In flight / awaiting user test:** the v0.1.87 exit-crash fix below — user to verify on Windows.
 
 ## Session log (running — newest first)
+### 2026-07-21 — v0.1.87 shipped (exit-crash, take 2)
+User hit `QThread: Destroyed while thread '' is still running` again (Windows, on
+close — the transcript's leading `omniterm` + trailing prompt is launch→use→close,
+not a pure-startup crash; confirmed plain startup opens 0 tabs and no QThread, so
+it can't be a startup abort). v0.1.86 joined workers with `wait(2000)` but a worker
+that refuses to stop in that window (the Windows `LocalPTYWorker` blocked in
+pywinpty `pty.read()` that `close()` didn't interrupt from the GUI thread) was left
+running and destroyed during teardown → `qFatal()` aborts the process. Fix: after
+the graceful wait, `MainWindow.closeEvent` and `SFTPBrowser.shutdown()` now
+force-`terminate()`+`wait()` any straggler still `isRunning()`. Safe because these
+workers block in native reads that release the GIL (GUI stays live while a terminal
+idles), so `terminate()` can't strand the GIL — and it's strictly better than the
+abort it replaces. `pty.close()` in `stop()` still handles the normal case, so
+terminate is a true last resort. Verified on Linux offscreen: a worker that ignores
+`stop()` and blocks in a GIL-releasing `os.read` is joined by the terminate path,
+`isRunning()`→False, process exits RC=0 (no abort). **Status: awaiting Windows test.**
+- Note: the harmless `QFont::setPointSize: Point size <= 0 (-1)` warning in the same
+  transcript is Qt noise (our code uses `setPointSizeF` with a `>0` guard), not the crash.
+
 ### 2026-07-20 — Relocated project to standalone `/data3/omniterm`
 Moved the repo out of the `/data3/mobax` workspace so OmniTerm stands on its own:
 `/data3/mobax/omniterm` → `/data3/omniterm` (repo + .git + local credential config),
