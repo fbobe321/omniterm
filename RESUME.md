@@ -15,7 +15,7 @@ only "ready to test" once it's version-bumped, rebuilt, and **published to PyPI*
 - **Version:** `0.1.86` — live on PyPI and GitHub, all work committed and pushed.
 - **PyPI:** https://pypi.org/project/omniterm/ (`pip install -U omniterm`, run `omniterm`)
 - **GitHub:** https://github.com/fbobe321/omniterm  (branch `main`, tag `v0.1.86`)
-- **PRD:** `/data3/mobax/PRD.md` (v4, as-built — native terminal).
+- **PRD:** `/data3/mobax/omniterm/PRD.md` (v4, as-built — native terminal).
 - **Working tree:** clean (last release committed + pushed).
 - **In flight / awaiting user test:** the v0.1.86 fixes below — user to verify on Windows.
 
