@@ -25,3 +25,9 @@ node_modules/
 .vscode/
 .idea/
 .DS_Store
+
+# Local workspace artifacts (moved in when the project became standalone;
+# kept on disk but not shipped in the public repo — text docs are versioned)
+/icon.png
+/.drydock/
+/Docs/
