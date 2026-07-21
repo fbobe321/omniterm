@@ -15,11 +15,21 @@ only "ready to test" once it's version-bumped, rebuilt, and **published to PyPI*
 - **Version:** `0.1.86` — live on PyPI and GitHub, all work committed and pushed.
 - **PyPI:** https://pypi.org/project/omniterm/ (`pip install -U omniterm`, run `omniterm`)
 - **GitHub:** https://github.com/fbobe321/omniterm  (branch `main`, tag `v0.1.86`)
-- **PRD:** `/data3/mobax/omniterm/PRD.md` (v4, as-built — native terminal).
+- **PRD:** `/data3/omniterm/PRD.md` (v4, as-built — native terminal).
 - **Working tree:** clean (last release committed + pushed).
 - **In flight / awaiting user test:** the v0.1.86 fixes below — user to verify on Windows.
 
 ## Session log (running — newest first)
+### 2026-07-20 — Relocated project to standalone `/data3/omniterm`
+Moved the repo out of the `/data3/mobax` workspace so OmniTerm stands on its own:
+`/data3/mobax/omniterm` → `/data3/omniterm` (repo + .git + local credential config),
+and folded the project's workspace docs in beside the code (DESIGN.md, DOCUMENTATION.md,
+MOBAXTERM_GUIDE.md, DRYDOCK_GUIDE.md, cmd_helper_PLAN.md, cmd_helper_PRD.md, Docs/,
+plus local-only `.drydock/`, `icon.png`, gitignored `.omniterm_sessions.json`).
+`/data3/mobax` removed. Repo remote/branch/creds verified intact. All path references
+updated (RESUME, memory). **Open decision:** which of the moved docs to commit to the
+public repo vs keep local — see below / ask the user.
+
 ### 2026-07-20 — v0.1.86 shipped (follow-folder + exit-crash fixes)
 Three fixes, all shipped in `0.1.86` (PyPI + tag `v0.1.86`). **Status: awaiting user test on Windows.**
 1. **Follow-folder command echoed in every terminal.** `SSHWorker.send_invisible` hid echo
@@ -66,7 +76,7 @@ Three fixes, all shipped in `0.1.86` (PyPI + tag `v0.1.86`). **Status: awaiting 
   `_accept_shadow*`). Config: `get/set_shadow_predictor`. Tests:
   `tests/test_shadow_predictor.py` (21 tests; run with
   `QT_QPA_PLATFORM=offscreen python -m pytest tests/`).
-- Plan/design doc: `/data3/mobax/cmd_helper_PLAN.md` (Phases 0–2 DONE; Phase 3 =
+- Plan/design doc: `/data3/omniterm/cmd_helper_PLAN.md` (Phases 0–2 DONE; Phase 3 =
   optional neural ONNX model, NOT started).
 
 ## Recent work (v0.1.64 → v0.1.66)
@@ -145,7 +155,7 @@ Three fixes, all shipped in `0.1.86` (PyPI + tag `v0.1.86`). **Status: awaiting 
   escape sequences, alt-screen sequence split across two `feed()` calls.
 
 ## Where the code lives
-- Repo root: `/data3/mobax/omniterm/`  (its own git repo, independent of outer `/data3/mobax`)
+- Repo root: `/data3/omniterm/`  (standalone git repo; project docs + code live together here)
 - Package: `src/omniterm/` — see PRD §1 for the module map.
   - `core/`: `config.py`, `ssh_client.py`, `serial_client.py`, `local_pty.py`
   - `ui/`: `main_window.py`, `session_dock.py`, `sftp_browser.py`,
@@ -153,7 +163,7 @@ Three fixes, all shipped in `0.1.86` (PyPI + tag `v0.1.86`). **Status: awaiting 
   - `static/icons/` (SVG set + app icon png/ico). NOTE: `static/xterm/` is gone.
 
 ## How to release (automatic — no go-ahead needed)
-Credentials are now stored locally, so no token typing/URLs. From `/data3/mobax/omniterm/`:
+Credentials are now stored locally, so no token typing/URLs. From `/data3/omniterm/`:
 1. Edit, then `python3 -m py_compile` the changed files. For UI, run an offscreen
    smoke test: `QT_QPA_PLATFORM=offscreen python3 ...` (instantiate widgets, feed
    data, `grab()` to force a paint — catches runtime errors headlessly).
@@ -182,7 +192,7 @@ ask for a new one." Never write raw token values into the repo / PRD / RESUME / 
 
 ## Quick sanity check on resume
 ```bash
-cd /data3/mobax/omniterm
+cd /data3/omniterm
 grep '^version' pyproject.toml            # should be 0.1.86 (or newer)
 python3 -m py_compile src/omniterm/main.py src/omniterm/core/*.py src/omniterm/ui/*.py
 git status --short                        # should be clean
