@@ -10,6 +10,7 @@ import threading
 import shutil
 from omniterm.core.config import get_group_folders_first, set_group_folders_first
 from omniterm.core.transfer import TransferWorker
+from omniterm.core.threads import register
 from omniterm.ui.icons import get_icon, file_icon
 
 
@@ -108,6 +109,7 @@ class SFTPLister(QThread):
 
     def __init__(self, transport=None, adapter=None, parent=None):
         super().__init__(parent)
+        register(self, "sftp-lister")
         self._transport = transport         # remote: paramiko Transport
         self._adapter = adapter             # local: a LocalFSAdapter
         self._sftp = adapter                # remote client opened lazily in run()

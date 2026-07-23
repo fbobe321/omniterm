@@ -1,4 +1,5 @@
 from PyQt6.QtCore import QThread, pyqtSignal
+from omniterm.core.threads import register
 import serial
 import time
 
@@ -9,6 +10,7 @@ class SerialWorker(QThread):
 
     def __init__(self, port, baud_rate=115200, data_bits=8, parity='N', stop_bits=1):
         super().__init__()
+        register(self, "serial-worker")
         self.port = port
         self.baud_rate = baud_rate
         self.data_bits = data_bits

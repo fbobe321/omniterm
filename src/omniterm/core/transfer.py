@@ -7,6 +7,8 @@ concurrently — paramiko's SFTPClient is not safe for concurrent use.
 """
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from omniterm.core.threads import register
+
 
 class _Cancelled(Exception):
     pass
@@ -23,6 +25,7 @@ class TransferWorker(QThread):
         Provide transport (paramiko Transport) for remote transfers, or
         local_adapter (LocalFSAdapter) for local ones."""
         super().__init__(parent)
+        register(self, "sftp-transfer")
         self._jobs = jobs
         self._transport = transport
         self._local_adapter = local_adapter

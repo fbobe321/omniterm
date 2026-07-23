@@ -12,6 +12,7 @@ from omniterm.ui.sftp_browser import SFTPBrowser
 from omniterm.core.ssh_client import SSHWorker
 from omniterm.core.serial_client import SerialWorker
 from omniterm.core.local_pty import LocalPTYWorker
+from omniterm.core import threads as thread_registry
 from omniterm.core.config import HOME_DIR, set_home_dir, init_cipher, set_shared_sessions_file, get_terminal_settings, set_terminal_settings, export_sessions, import_sessions, get_use_inshellisense, set_use_inshellisense, get_layouts, save_layout, delete_layout, find_session
 
 class MainWindow(QMainWindow):
@@ -65,6 +66,14 @@ class MainWindow(QMainWindow):
         # Destroyed while thread is still running"), so they're parked here
         # until their finished signal fires.
         self._dying_workers = set()
+        # Every worker thread is also held by the process-wide registry in
+        # core/threads.py, which is what actually guarantees none of them can be
+        # destroyed mid-run (the abort above). This timer lets go of the ones
+        # that have finished - from the GUI thread, where that is safe.
+        self._thread_reaper = QTimer(self)
+        self._thread_reaper.setInterval(5000)
+        self._thread_reaper.timeout.connect(thread_registry.prune)
+        self._thread_reaper.start()
         self._blink_on = False
         self._blink_timer = QTimer(self)
         self._blink_timer.setInterval(500)
@@ -1358,13 +1367,18 @@ class MainWindow(QMainWindow):
             if worker.isRunning():
                 try:
                     worker.terminate()
-                    worker.wait()
+                    worker.wait(1000)
                 except Exception:
                     pass
         # The Files panel runs its own QThreads (directory listers, transfers)
         # that aren't terminal workers; join them too or their destruction
         # during window teardown aborts the process.
         self.sftp_browser.shutdown()
+        # Catch-all: stop/join/terminate ANY worker thread still alive, including
+        # ones nothing above knows about (a transplanted worker, a lister from a
+        # closed connection, a transfer that outlived its dialog). The registry
+        # is the only list that is guaranteed complete.
+        thread_registry.stop_all()
         super().closeEvent(event)
 
     GITHUB_URL = "https://github.com/fbobe321/omniterm"

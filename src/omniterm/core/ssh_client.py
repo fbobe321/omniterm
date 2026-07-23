@@ -8,6 +8,7 @@ import threading
 import re
 import urllib.parse
 from omniterm.core.config import decrypt_password
+from omniterm.core.threads import register
 
 # OSC 7 sequence a shell can emit to report its working directory:
 #   ESC ] 7 ; file://host/path  (BEL or ESC-backslash terminator)
@@ -23,6 +24,7 @@ class SSHWorker(QThread):
 
     def __init__(self, session_data, inshellisense=False):
         super().__init__()
+        register(self, "ssh-worker")
         self.session_data = session_data
         self._running = True
         self.tunnels = []

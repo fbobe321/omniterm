@@ -6,6 +6,7 @@ import shutil
 import time
 import urllib.parse
 from omniterm.core.config import HOME_DIR
+from omniterm.core.threads import register
 
 # Make bash report its working directory via OSC 7 on every prompt. This is set
 # in the shell's *environment* at spawn (below), so nothing is ever typed into
@@ -26,6 +27,7 @@ class LocalPTYWorker(QThread):
 
     def __init__(self, prefer_unix=False, inshellisense=False, startup=None):
         super().__init__()
+        register(self, "local-pty-worker")
         self._running = True
         self.process = None
         self.master_fd = None

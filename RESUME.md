@@ -12,14 +12,45 @@ only "ready to test" once it's version-bumped, rebuilt, and **published to PyPI*
 **Publishing is automatic after changes — do NOT ask for go-ahead** (standing instruction).
 
 ## Current state
-- **Version:** `0.1.88` — live on PyPI and GitHub, all work committed and pushed.
+- **Version:** `0.1.89` — live on PyPI and GitHub, all work committed and pushed.
 - **PyPI:** https://pypi.org/project/omniterm/ (`pip install -U omniterm`, run `omniterm`)
 - **GitHub:** https://github.com/fbobe321/omniterm  (branch `main`, tag `v0.1.88`)
 - **PRD:** `/data3/omniterm/PRD.md` (v4, as-built — native terminal).
 - **Working tree:** clean (last release committed + pushed).
-- **In flight / awaiting user test:** v0.1.87 exit-crash fix + v0.1.88 Files delete — user to verify on Windows.
+- **In flight / awaiting user test:** v0.1.89 QThread-abort fix (structural) + v0.1.88 Files delete.
 
 ## Session log (running — newest first)
+### 2026-07-22 — v0.1.89 shipped (QThread abort — structural fix, take 3)
+User hit `QThread: Destroyed while thread '' is still running` **again** on 0.1.88
+and is (rightly) fed up. Root cause of the repeats: v0.1.86/0.1.87 both fixed the
+symptom by enumerating the threads we knew about (terminal workers in tabs,
+`_dying_workers`, Files-panel listers/transfer) and joining them on close. Qt
+aborts the process the moment **any** QThread object is destroyed before run()
+returns, so a single thread outside those lists — or destroyed by C++ parent
+teardown / a dropped Python ref rather than by us — still killed the app. Two
+structural fixes, no enumeration:
+1. **`core/threads.py` — process-wide registry.** Every worker (`SSHWorker`,
+   `SerialWorker`, `LocalPTYWorker`, `TransferWorker`, `SFTPLister`) calls
+   `register(self, "<name>")` in `__init__`. The registry holds a **strong ref**
+   for the thread's life, so no dropped reference / gc cycle / widget teardown can
+   free a running QThread. Refs are released only by `prune()` (GUI-thread
+   `QTimer`, 5 s, and only when `isFinished()`) and `stop_all()`
+   (stop→wait→terminate catch-all, called at the end of `closeEvent`). `register`
+   also sets an `objectName`, so if this ever fires again the message **names the
+   thread** instead of printing `''`.
+2. **`main.py` exits with `os._exit(rc)`** right after `app.exec()` returns —
+   skipping Qt/Python teardown entirely, so teardown has no chance to abort.
+   Safe: config/sessions are written as they change, nothing is saved at exit.
+Verified on Linux offscreen: a running thread whose last ref is dropped + `gc`
+survives (bare PyQt6 repro aborts with RC=134); real MainWindow with 2 local
+terminals + 2 listers + a deliberately wedged worker (ignores `stop()`, blocked in
+`os.read`) closes with all threads stopped, RC=0; the real `main()` exit path
+returns RC=0. Tests: `tests/test_threads.py` (6 new; 55 total pass).
+**Status: awaiting Windows test.**
+- The `QFont::setPointSize: Point size <= 0 (-1)` line is still harmless Qt noise
+  (`font-size: 11px` in the stylesheet makes Qt fonts pixel-sized → `pointSize()`
+  is -1). Left alone deliberately: switching the stylesheet to `pt` would resize
+  the whole UI on Windows.
 ### 2026-07-21 — v0.1.88 shipped (Files panel: delete files/folders)
 Right-click context menu in the Files (SFTP) panel gained a **Delete** entry for
 files and folders, with an "are you sure?" confirmation (`QMessageBox.question`,
